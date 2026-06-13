@@ -5,6 +5,8 @@
 - **常に `main` ブランチで直接作業する**
 - 別ブランチを作らない・PRを作らない
 - 作業完了後は `git push origin main` で直接プッシュする
+- **force push(`git push -f` / `--force`)は絶対に行わない**
+- 新しいブランチを作成した場合は、必ずmainにマージしてから削除する。force pushでmainを上書きしない
 
 ---
 
