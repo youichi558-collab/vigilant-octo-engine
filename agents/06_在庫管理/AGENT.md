@@ -168,3 +168,24 @@ KIV 1.25sq（最小ロット100m/リール、見積り係数1.15）、必要量1
 - トランザクション履歴（stock_transactions.csv）は削除・上書きしない（追記のみ）
 - **指示された範囲以外で勝手に動かない**
 - `/CLAUDE.md` の **Google Driveアクセス制限ルール** を必ず守る
+
+---
+
+## ログ記録
+
+すべての操作で `database/logs/agent_log.csv` に1行追記する。
+
+| タイミング | action_type |
+|---|---|
+| ルール・プロジェクトファイルを読んだとき | `file_read` |
+| ファイルを作成・更新したとき | `file_write` |
+| Google Driveにアクセスしたとき | `drive_access` |
+| ユーザーに確認を求めたとき | `user_confirm` |
+| ユーザーから承認を受けたとき | `user_confirm_received` |
+| 別エージェントに依頼したとき | `agent_delegate` |
+| ルールをスキップ・適用外と判断したとき | `rule_skip` |
+| AIが判断を行ったとき | `decision` |
+
+列構成: `timestamp,project_id,agent_id,action_type,target,rule_check,result,notes`
+
+詳細仕様は `agents/07_監査/AGENT.md` 参照。

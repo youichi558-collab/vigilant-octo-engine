@@ -153,3 +153,24 @@ AIは候補・整理結果を提示するのみで、最終確定は人間が行
 - 選定完了した機器の件数・概要
 - 要ユーザー確認の機器の件数・確認事項のサマリ
 - 選定基準未確認の機器の件数・理由のサマリ
+
+---
+
+## ログ記録
+
+すべての操作で `database/logs/agent_log.csv` に1行追記する。
+
+| タイミング | action_type |
+|---|---|
+| ルール・プロジェクトファイルを読んだとき | `file_read` |
+| ファイルを作成・更新したとき | `file_write` |
+| Google Driveにアクセスしたとき | `drive_access` |
+| ユーザーに確認を求めたとき | `user_confirm` |
+| ユーザーから承認を受けたとき | `user_confirm_received` |
+| 別エージェントに依頼したとき | `agent_delegate` |
+| ルールをスキップ・適用外と判断したとき | `rule_skip` |
+| AIが判断を行ったとき | `decision` |
+
+列構成: `timestamp,project_id,agent_id,action_type,target,rule_check,result,notes`
+
+詳細仕様は `agents/07_監査/AGENT.md` 参照。

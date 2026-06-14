@@ -112,3 +112,24 @@ PLCプログラム/タッチパネル画面データ/パラメータファイル
 - 作成した `spec_summary.md` のパス
 - 未決定項目一覧の件数・概要(客先確認/内部確定/現地調査の内訳)
 - 過去案件を参照した場合、参照元のproject_id
+
+---
+
+## ログ記録
+
+すべての操作で `database/logs/agent_log.csv` に1行追記する。
+
+| タイミング | action_type |
+|---|---|
+| ルール・プロジェクトファイルを読んだとき | `file_read` |
+| ファイルを作成・更新したとき | `file_write` |
+| Google Driveにアクセスしたとき | `drive_access` |
+| ユーザーに確認を求めたとき | `user_confirm` |
+| ユーザーから承認を受けたとき | `user_confirm_received` |
+| 別エージェントに依頼したとき | `agent_delegate` |
+| ルールをスキップ・適用外と判断したとき | `rule_skip` |
+| AIが判断を行ったとき | `decision` |
+
+列構成: `timestamp,project_id,agent_id,action_type,target,rule_check,result,notes`
+
+詳細仕様は `agents/07_監査/AGENT.md` 参照。
