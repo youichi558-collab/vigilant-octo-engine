@@ -26,14 +26,17 @@ AIは候補・整理結果を提示するのみで、最終確定は人間が行
 (現状、`database/parts_master/index.csv` に登録があるのは
 三菱電機・富士電機のブレーカー・電磁接触器・電磁開閉器が中心)
 
+> **電線は index.csv を使わない**。`database/rules/電線選定.md` の許容電流表・計算式に従って選定する。
+
 ---
 
 ## 入力
 
 - `database/projects/{project_id}/spec_summary.md`(Agent01出力)
 - `database/projects/{project_id}/standard_proposal.md`(Agent02出力、ある場合)
-- `database/parts_master/index.csv`
+- `database/parts_master/index.csv`（電線以外の部品選定に使用）
 - `database/rules/選定ルール.md`
+- `database/rules/電線選定.md`（電線サイズ選定・電圧降下計算に使用）
 - 「部品カタログ」フォルダ内のカタログPDF(三菱電機・富士電機)
 
 ---
@@ -103,6 +106,18 @@ AIは候補・整理結果を提示するのみで、最終確定は人間が行
 8. 複数候補から1つに絞り切れない場合(価格優先か納期優先か等、
    Agent03の範囲外の条件が必要な場合)は、選定を確定せずユーザーに確認する。
 
+### 電線サイズ選定（上記とは別フロー）
+
+電線は `index.csv` を使わず、`database/rules/電線選定.md` に従って計算で選定する。
+
+1. `spec_summary.md` から各回路の負荷電流・設置環境（盤内温度等）を確認する。
+2. 線路長が `spec_summary.md` に記載がない場合はユーザーに確認する（電圧降下計算に必須）。
+3. `電線選定.md` の「4. 電線サイズ選定フロー」に従い、
+   許容電流→補正→電圧降下→保護協調の順で計算する。
+4. 計算式・補正係数・計算結果を `parts_selection.md` に記録する。
+5. ブレーカ選定結果との保護協調を確認する（電線許容電流 ≥ ブレーカ定格電流）。
+6. 線路長不明など計算できない項目はユーザー確認事項として記載する。
+
 ---
 
 ## 価格・納期について
@@ -138,3 +153,24 @@ AIは候補・整理結果を提示するのみで、最終確定は人間が行
 - 選定完了した機器の件数・概要
 - 要ユーザー確認の機器の件数・確認事項のサマリ
 - 選定基準未確認の機器の件数・理由のサマリ
+
+---
+
+## ログ記録
+
+すべての操作で `database/logs/agent_log.csv` に1行追記する。
+
+| タイミング | action_type |
+|---|---|
+| ルール・プロジェクトファイルを読んだとき | `file_read` |
+| ファイルを作成・更新したとき | `file_write` |
+| Google Driveにアクセスしたとき | `drive_access` |
+| ユーザーに確認を求めたとき | `user_confirm` |
+| ユーザーから承認を受けたとき | `user_confirm_received` |
+| 別エージェントに依頼したとき | `agent_delegate` |
+| ルールをスキップ・適用外と判断したとき | `rule_skip` |
+| AIが判断を行ったとき | `decision` |
+
+列構成: `timestamp,project_id,agent_id,action_type,target,rule_check,result,notes`
+
+詳細仕様は `agents/07_監査/AGENT.md` 参照。
