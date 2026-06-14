@@ -103,7 +103,8 @@ Agent00〜04で運用する(BOM/見積エージェントは後日追加)。
   parts_master/
     index.csv        ← 品番・カテゴリ・メーカー・PDFファイル名・ページ範囲
   knowledge/
-    past_cases_index.csv ← 完了案件の概要インデックス(Agent02が管理)
+    past_cases_index.csv       ← 完了案件の概要インデックス(Agent02が管理)
+    manufacturing_feedback.csv ← 材料カテゴリごとの見積量・発注量・実使用量(Agent02が管理)
   rules/
     標準仕様.md
     選定ルール.md
