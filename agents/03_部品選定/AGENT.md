@@ -37,7 +37,9 @@ AIは候補・整理結果を提示するのみで、最終確定は人間が行
 - `database/parts_master/index.csv`（電線以外の部品選定に使用）
 - `database/rules/選定ルール.md`
 - `database/rules/電線選定.md`（電線サイズ選定・電圧降下計算に使用）
-- 「部品カタログ」フォルダ内のカタログPDF(三菱電機・富士電機)
+- **カタログ参照（優先順位あり）**:
+  1. `database/parts_master/catalog_tables/{カタログ名}/tables.json` — ローカル変換済みJSON (存在すれば最優先)
+  2. 「部品カタログ」フォルダ内のカタログPDF (ローカルJSONがない場合のみDriveにアクセス)
 
 ---
 
@@ -96,7 +98,11 @@ AIは候補・整理結果を提示するのみで、最終確定は人間が行
 2. `index.csv` を `category` / `maker` / `series` でフィルタし、
    設計条件(定格・極数等)に近い候補を抽出する。
 3. `selection_guide_ref` 列を確認し、該当メーカー・カテゴリの
-   選定基準・選定表が載っているカタログPDFのページを読み込む。
+   選定基準・選定表が載っているページを参照する。
+   - `database/parts_master/catalog_tables/` に変換済みJSONがあればそちらを参照する。
+   - なければ「部品カタログ」フォルダ内のPDFを直接読み込む。
+   - PDFから変換する場合: `scripts/convert_catalog.py <pdf_path> <pages> <output_name>` を実行し、
+     結果をリポジトリにコミットしておくと次回から高速に参照できる。
 4. Agent01から渡された設計条件(負荷電流・短絡容量・使用環境等)を、
    手順3で読み込んだ選定基準・選定表に当てはめて選定する。
 5. 規格・安全要件を満たさない候補は除外し、除外理由を記録する。
