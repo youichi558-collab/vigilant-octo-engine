@@ -5,3 +5,6 @@ timestamp,project_id,agent_id,action_type,target,rule_check,result,notes
 2026-06-14T11:31:00Z,20260614-001,Agent01,file_read,agents/01_仕様解析/AGENT.md,なし,OK,AGENT.md読込
 2026-06-14T11:31:01Z,20260614-001,Agent01,file_write,database/projects/20260614-001/spec_summary.md,なし,OK,仕様解析完了・spec_summary.md作成
 2026-06-14T11:31:02Z,20260614-001,Agent01,user_confirm,未決定項目4件(客先確認),なし,待機中,U-3〜U-6を客先確認質問として出力
+2026-06-14T11:34:00Z,20260614-001,Agent00,user_confirm_received,spec_summary.md,なし,OK,客先確認事項4件の回答受領・spec_summary.md更新
+2026-06-14T11:34:01Z,20260614-001,Agent00,decision,Agent04起動判断,安全カテゴリ要求なし,スキップ,安全カテゴリ不要のためAgent04スキップ
+2026-06-14T11:34:02Z,20260614-001,Agent00,agent_delegate,Agent03,なし,OK,部品選定を依頼
