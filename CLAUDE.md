@@ -97,6 +97,7 @@ Agent00〜04で運用する(BOM/見積エージェントは後日追加)。
   01_仕様解析/AGENT.md
   02_標準仕様判断/AGENT.md
   03_部品選定/AGENT.md
+  04_安全設計/AGENT.md
 /database/
   parts_master/
     index.csv        ← 品番・カテゴリ・メーカー・PDFファイル名・ページ範囲
@@ -104,6 +105,15 @@ Agent00〜04で運用する(BOM/見積エージェントは後日追加)。
     標準仕様.md
     選定ルール.md
     規格.md
+  projects/
+    _template/       ← 案件フォルダのひな形(新規案件時にコピーして使う)
+      spec_summary.md      ← Agent01出力
+      safety_design.md     ← Agent04出力(安全要求がある案件のみ)
+      standard_proposal.md ← Agent02出力(過去データ整備後)
+      parts_selection.md   ← Agent03出力
+      design_summary.md    ← Agent00統合サマリ
+    {案件ID}/        ← 実案件フォルダ(例: 20260614-001/)
+      （上記5ファイルと同構成）
 ```
 
 ---
