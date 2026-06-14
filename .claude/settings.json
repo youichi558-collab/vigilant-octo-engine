@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Google_Drive__read_file_content",
+      "mcp__Google_Drive__search_files",
+      "mcp__Google_Drive__get_file_metadata"
+    ]
+  }
+}
