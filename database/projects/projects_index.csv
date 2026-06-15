@@ -1,2 +1,2 @@
 project_id,project_name,client,delivery_site,order_date,delivery_date,work_days,status,agent04_required,notes
-20260615-TEST,搬送ライン制御盤（テスト用）,テスト工業株式会社,テスト工場 第3棟,2026-06-15,2026-09-30,107,仕様解析中,要,テスト運用用の仮案件
+20260615-TEST,搬送ライン制御盤（テスト用）,テスト工業株式会社,テスト工場 第3棟,2026-06-15,2026-09-30,107,完了,要,テスト運用用の仮案件
