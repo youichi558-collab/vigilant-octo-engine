@@ -186,9 +186,13 @@ def make_question(ws, row, no, question, note):
     c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     c.border = thin_border()
 
-    # 行高さ: 改行数に応じて調整
-    lines = max(question.count("\n") + 1, 2)
-    ws.row_dimensions[row].height = max(lines * 16, 32)
+    # 行高さ: 改行数と文字数から推定
+    newlines = question.count("\n") + 1
+    # B列の列幅42文字換算で折り返し行数を推定
+    max_line_len = max(len(l) for l in question.split("\n"))
+    wrap_lines = max(1, -(-max_line_len // 38))  # 切り上げ除算
+    total_lines = max(newlines, wrap_lines, 2)
+    ws.row_dimensions[row].height = max(total_lines * 18, 40)
     return row + 1
 
 def generate(project_id, output_dir="."):
