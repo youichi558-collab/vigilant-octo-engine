@@ -192,7 +192,7 @@ def make_question(ws, row, no, question, note):
     max_line_len = max(len(l) for l in question.split("\n"))
     wrap_lines = max(1, -(-max_line_len // 46))  # 切り上げ除算
     total_lines = max(newlines, wrap_lines, 2)
-    ws.row_dimensions[row].height = max(total_lines * 18, 40)
+    ws.row_dimensions[row].height = max(total_lines * 24, 60)
     return row + 1
 
 def generate(project_id, output_dir="."):
