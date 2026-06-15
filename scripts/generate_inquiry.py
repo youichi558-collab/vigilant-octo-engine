@@ -188,9 +188,9 @@ def make_question(ws, row, no, question, note):
 
     # 行高さ: 改行数と文字数から推定
     newlines = question.count("\n") + 1
-    # B列の列幅42文字換算で折り返し行数を推定
+    # B列の列幅50文字換算で折り返し行数を推定
     max_line_len = max(len(l) for l in question.split("\n"))
-    wrap_lines = max(1, -(-max_line_len // 38))  # 切り上げ除算
+    wrap_lines = max(1, -(-max_line_len // 46))  # 切り上げ除算
     total_lines = max(newlines, wrap_lines, 2)
     ws.row_dimensions[row].height = max(total_lines * 18, 40)
     return row + 1
@@ -200,11 +200,11 @@ def generate(project_id, output_dir="."):
     ws = wb.active
     ws.title = "質疑書"
 
-    # 列幅設定
+    # 列幅設定（全列等幅）
     ws.column_dimensions["A"].width = 8    # No
-    ws.column_dimensions["B"].width = 42   # 確認事項
-    ws.column_dimensions["C"].width = 30   # 回答欄
-    ws.column_dimensions["D"].width = 22   # 備考
+    ws.column_dimensions["B"].width = 50   # 確認事項
+    ws.column_dimensions["C"].width = 50   # 回答欄
+    ws.column_dimensions["D"].width = 50   # 備考
 
     today = date.today().strftime("%Y-%m-%d")
     row = make_header(ws, project_id, today)
