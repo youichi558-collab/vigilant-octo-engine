@@ -92,15 +92,18 @@ def make_header(ws, project_id, today):
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 36
 
+    # (label, value, manual_input)
+    # manual_input=True → 人間が手入力する欄（水色背景・空欄）
     meta = [
-        ("宛先",     "（客先名） 御中"),
-        ("件名",     "制御盤 仕様確認のお願い"),
-        ("送付日",   today),
-        ("回答期限", ""),
-        ("送付者",   ""),
-        ("連絡先",   ""),
+        ("宛先",     "（客先名） 御中",          False),
+        ("設備名称", "",                          True),
+        ("件名",     "",                          True),
+        ("送付日",   today,                       False),
+        ("回答期限", "",                          False),
+        ("送付者",   "",                          False),
+        ("連絡先",   "",                          False),
     ]
-    for i, (label, val) in enumerate(meta, start=2):
+    for i, (label, val, manual) in enumerate(meta, start=2):
         ws[f"A{i}"].value = label
         ws[f"A{i}"].font = Font(name="メイリオ", size=10, bold=True)
         ws[f"A{i}"].fill = PatternFill("solid", fgColor=COLOR_SECTION_BG)
@@ -112,6 +115,8 @@ def make_header(ws, project_id, today):
         ws[f"B{i}"].font = Font(name="メイリオ", size=10)
         ws[f"B{i}"].alignment = Alignment(horizontal="left", vertical="center")
         ws[f"B{i}"].border = thin_border()
+        if manual:
+            ws[f"B{i}"].fill = PatternFill("solid", fgColor="F2F9FF")
 
     # 前文
     row = len(meta) + 2
