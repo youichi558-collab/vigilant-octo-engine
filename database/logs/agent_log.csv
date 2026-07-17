@@ -1,1 +1,10 @@
 timestamp,project_id,agent_id,action_type,target,rule_check,result,notes
+2026-06-15T16:44:00,20260615-TEST,Agent07,audit_start,database/projects/20260615-TEST/,—,ok,案件完了時監査開始
+2026-06-15T16:44:00,20260615-TEST,Agent07,file_read,database/projects/20260615-TEST/spec_summary.md,—,ok,監査対象ファイル読み込み
+2026-06-15T16:44:00,20260615-TEST,Agent07,file_read,database/projects/20260615-TEST/parts_selection.md,—,ok,監査対象ファイル読み込み
+2026-06-15T16:44:00,20260615-TEST,Agent07,file_read,database/projects/20260615-TEST/safety_design.md,—,ok,監査対象ファイル読み込み
+2026-06-15T16:44:00,20260615-TEST,Agent07,file_read,database/projects/20260615-TEST/design_summary.md,—,ok,監査対象ファイル読み込み
+2026-06-15T16:44:00,20260615-TEST,Agent07,decision,agent_log.csv 空チェック,—,warning,W-1: 全Agentのログエントリが0件。テスト運用でのログ未実装。
+2026-06-15T16:44:00,20260615-TEST,Agent07,decision,安全リレーカタログ未参照チェック,AI不確定原則,warning,W-2: HR1S-BAC24VはカタログPDFなし・ページ番号なし。ユーザー承認済みのため Violation にはしない。
+2026-06-15T16:44:00,20260615-TEST,Agent07,file_write,database/projects/20260615-TEST/audit_report.md,—,ok,監査レポート出力
+2026-06-15T16:44:00,20260615-TEST,Agent07,audit_complete,database/projects/20260615-TEST/,—,ok,Violation 0件 / Warning 3件。案件完了可と判断。

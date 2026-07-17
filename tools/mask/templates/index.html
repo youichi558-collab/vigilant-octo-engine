@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>マスクツール</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: "Hiragino Sans", "Meiryo", sans-serif;
+    font-size: 14px;
+    background: #f4f5f7;
+    color: #1a1a2e;
+    min-height: 100vh;
+  }
+
+  header {
+    background: #1a1a2e;
+    color: #fff;
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  header h1 { font-size: 18px; font-weight: 700; letter-spacing: .04em; }
+  header .badge {
+    background: #e63946;
+    color: #fff;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 700;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: 0;
+    min-height: calc(100vh - 57px);
+  }
+
+  /* ---- 左パネル ---- */
+  .left-panel {
+    background: #fff;
+    border-right: 1px solid #e0e0e0;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-title {
+    background: #f8f8fa;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 12px 20px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #666;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .section {
+    padding: 16px 20px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .section-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .section-label::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 14px;
+    background: #e63946;
+    border-radius: 2px;
+  }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .field-wrap { position: relative; }
+  .field-wrap input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #d0d0d8;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    transition: border-color .15s;
+    background: #fff;
+  }
+  .field-wrap input:focus {
+    outline: none;
+    border-color: #e63946;
+    box-shadow: 0 0 0 2px rgba(230,57,70,.12);
+  }
+  .field-wrap input.has-value {
+    border-color: #2ecc71;
+    background: #f6fff9;
+  }
+  .arrow-label {
+    font-size: 12px;
+    color: #888;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .mask-badge {
+    display: inline-block;
+    background: #fff3cd;
+    border: 1px solid #e0c060;
+    color: #7a5c00;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  /* パターン切り替え */
+  .pattern-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 0;
+    border-bottom: 1px solid #f4f4f4;
+  }
+  .pattern-row:last-child { border-bottom: none; }
+  .pattern-info { flex: 1; }
+  .pattern-name { font-size: 13px; font-weight: 600; }
+  .pattern-regex { font-size: 10px; color: #999; font-family: monospace; margin-top: 1px; }
+
+  .toggle-wrap { display: flex; align-items: center; gap: 8px; }
+  .toggle {
+    position: relative;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: #ccc;
+    border-radius: 11px;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 16px; height: 16px;
+    left: 3px; top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,.2);
+  }
+  .toggle input:checked + .toggle-slider { background: #2ecc71; }
+  .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+  /* ---- 右パネル ---- */
+  .right-panel {
+    padding: 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .drop-zone {
+    border: 2px dashed #c0c4cc;
+    border-radius: 12px;
+    padding: 48px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    background: #fff;
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: #e63946;
+    background: #fff8f8;
+  }
+  .drop-zone input[type=file] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .drop-icon { font-size: 48px; margin-bottom: 12px; }
+  .drop-text { font-size: 15px; font-weight: 700; color: #444; margin-bottom: 6px; }
+  .drop-sub { font-size: 12px; color: #888; }
+  .selected-file {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background: #f0faf4;
+    border: 1px solid #9ee6b8;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a6e3e;
+  }
+  .selected-file.visible { display: flex; }
+  .file-icon { font-size: 22px; }
+
+  .btn-process {
+    width: 100%;
+    padding: 16px;
+    background: #e63946;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    letter-spacing: .04em;
+    transition: background .15s, transform .1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn-process:hover { background: #c1121f; }
+  .btn-process:active { transform: scale(.98); }
+  .btn-process:disabled { background: #ccc; cursor: not-allowed; }
+
+  .result-box {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .result-box.visible { display: flex; }
+
+  .result-ok {
+    background: #f0faf4;
+    border: 1px solid #9ee6b8;
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .result-ok .check { font-size: 28px; }
+  .result-ok .msg { font-weight: 700; font-size: 14px; color: #1a6e3e; }
+  .result-ok .sub { font-size: 12px; color: #555; margin-top: 2px; }
+
+  .btn-download {
+    padding: 14px;
+    background: #1a6e3e;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: center;
+    text-decoration: none;
+    display: block;
+    transition: background .15s;
+  }
+  .btn-download:hover { background: #145732; }
+
+  .error-box {
+    display: none;
+    background: #fff0f0;
+    border: 1px solid #f5a0a0;
+    border-radius: 10px;
+    padding: 14px 18px;
+    color: #c0392b;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .error-box.visible { display: block; }
+
+  .spinner {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-size: 14px;
+    color: #888;
+    padding: 12px;
+  }
+  .spinner.visible { display: flex; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin-icon { animation: spin 1s linear infinite; font-size: 20px; }
+
+  .tips {
+    background: #f8f9ff;
+    border: 1px solid #dde0f0;
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 12px;
+    color: #555;
+    line-height: 1.8;
+  }
+  .tips b { color: #1a1a2e; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>マスクツール</h1>
+  <span class="badge">社外秘情報の隠蔽</span>
+</header>
+
+<form id="mainForm" method="POST" action="/process" enctype="multipart/form-data">
+<div class="layout">
+
+  <!-- 左パネル: マスク設定 -->
+  <div class="left-panel">
+    <div class="panel-title">マスク設定</div>
+
+    <div class="section">
+      <div class="section-label">置き換えリスト（実際の値を入力）</div>
+      {% for rule in value_rules %}
+      <div class="field-row">
+        <div class="field-wrap">
+          <input
+            type="text"
+            name="val_{{ loop.index0 }}"
+            placeholder="{{ rule.placeholder }}"
+            autocomplete="off"
+            spellcheck="false"
+            oninput="onValueInput(this)"
+          >
+        </div>
+        <span class="arrow-label">→ <span class="mask-badge">{{ rule.label }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="section" style="flex:1; overflow-y:auto;">
+      <div class="section-label">自動検出パターン</div>
+      {% for rule in pattern_rules %}
+      <div class="pattern-row">
+        <div class="pattern-info">
+          <div class="pattern-name">{{ rule.label }}</div>
+          <div class="pattern-regex">{{ rule.pattern[:50] }}{% if rule.pattern|length > 50 %}…{% endif %}</div>
+        </div>
+        <div class="toggle-wrap">
+          <label class="toggle">
+            <input type="checkbox" name="pat_{{ loop.index0 }}" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- 右パネル: ファイル処理 -->
+  <div class="right-panel">
+
+    <div class="drop-zone" id="dropZone">
+      <input type="file" name="file" id="fileInput"
+             accept=".pdf,.docx,.txt,.md,.csv,.html"
+             onchange="onFileSelect(this)">
+      <div class="drop-icon">📄</div>
+      <div class="drop-text">ファイルをドロップ、またはクリックして選択</div>
+      <div class="drop-sub">対応形式: PDF（黒塗り）・DOCX・TXT・MD・CSV</div>
+    </div>
+
+    <div class="selected-file" id="selectedFile">
+      <span class="file-icon">📎</span>
+      <span id="selectedFileName"></span>
+    </div>
+
+    <button type="submit" class="btn-process" id="btnProcess" disabled>
+      <span>🔒</span> マスク実行
+    </button>
+
+    <div class="spinner" id="spinner">
+      <span class="spin-icon">⏳</span> 処理中です…
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="result-box" id="resultBox">
+      <div class="result-ok">
+        <span class="check">✅</span>
+        <div>
+          <div class="msg">マスク完了</div>
+          <div class="sub" id="resultSub"></div>
+        </div>
+      </div>
+      <a id="downloadLink" class="btn-download">⬇ マスク済みファイルをダウンロード</a>
+    </div>
+
+    <div class="tips">
+      <b>使い方のヒント</b><br>
+      • 左の「置き換えリスト」に客先名・設備番号など<b>実際の値</b>を入力してください<br>
+      • 入力しない項目はスキップされます（空欄OK）<br>
+      • 自動検出パターンは不要なものをOFFにできます<br>
+      • <b>PDF</b> は黒塗り、<b>DOCX/TXT/MD</b> は《》ラベルに置換されます
+    </div>
+
+  </div>
+</div>
+</form>
+
+<script>
+function onValueInput(el) {
+  el.classList.toggle('has-value', el.value.trim().length > 0);
+}
+
+function onFileSelect(input) {
+  const file = input.files[0];
+  const sf = document.getElementById('selectedFile');
+  const sfn = document.getElementById('selectedFileName');
+  const btn = document.getElementById('btnProcess');
+  if (file) {
+    sfn.textContent = file.name + '  (' + formatSize(file.size) + ')';
+    sf.classList.add('visible');
+    btn.disabled = false;
+  } else {
+    sf.classList.remove('visible');
+    btn.disabled = true;
+  }
+  resetResult();
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+const dropZone = document.getElementById('dropZone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const files = e.dataTransfer.files;
+  if (files.length) {
+    document.getElementById('fileInput').files = files;
+    onFileSelect(document.getElementById('fileInput'));
+  }
+});
+
+function resetResult() {
+  document.getElementById('resultBox').classList.remove('visible');
+  document.getElementById('errorBox').classList.remove('visible');
+  document.getElementById('errorBox').textContent = '';
+}
+
+document.getElementById('mainForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  resetResult();
+
+  const spinner = document.getElementById('spinner');
+  const btn = document.getElementById('btnProcess');
+  spinner.classList.add('visible');
+  btn.disabled = true;
+
+  try {
+    const formData = new FormData(this);
+    const response = await fetch('/process', { method: 'POST', body: formData });
+
+    if (!response.ok) {
+      const err = await response.json();
+      showError(err.error || '不明なエラーが発生しました');
+      return;
+    }
+
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename\*?=['"]?(?:UTF-\d['"]*)?([^;\r\n"']*)['"]?/i)
+                || disposition.match(/filename=([^;]+)/);
+    const filename = match ? decodeURIComponent(match[1].trim()) : 'masked_output';
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+
+    const link = document.getElementById('downloadLink');
+    link.href = url;
+    link.download = filename;
+    link.textContent = '⬇ ' + filename + ' をダウンロード';
+
+    document.getElementById('resultSub').textContent = 'ファイル: ' + filename;
+    document.getElementById('resultBox').classList.add('visible');
+
+  } catch (err) {
+    showError('通信エラー: ' + err.message);
+  } finally {
+    spinner.classList.remove('visible');
+    btn.disabled = false;
+  }
+});
+
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.textContent = '⚠ ' + msg;
+  box.classList.add('visible');
+}
+</script>
+</body>
+</html>
