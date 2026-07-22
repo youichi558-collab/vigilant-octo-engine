@@ -565,6 +565,7 @@ async function loadPreviewPage() {
         cb.checked = false;
         cb.dataset.bbox = JSON.stringify(entry.bbox);
         cb.dataset.page = entry.page;
+        cb.dataset.text = entry.text;
         const val = document.createElement('span');
         val.className = 'candidate-val';
         val.textContent = entry.text;
@@ -864,8 +865,10 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
     });
     // 範囲指定を追加
     formData.append('regions', JSON.stringify(selectedRegions));
-    // テキスト候補のbboxをregionsとして追加
+    // テキスト候補: 文字列で全ページ走査（位置が違っても黒塗りされる）
+    // bboxはチェックした箇所そのものの保険として併送する
     const candidateRegions = [];
+    const candidateTexts = [];
     document.querySelectorAll('#candidateList input[type=checkbox]:checked').forEach(cb => {
       const bbox = JSON.parse(cb.dataset.bbox);
       candidateRegions.push({
@@ -873,8 +876,10 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
         x0: bbox[0], y0: bbox[1], x1: bbox[2], y1: bbox[3],
         allPages: false,
       });
+      candidateTexts.push(cb.dataset.text);
     });
     formData.append('candidate_regions', JSON.stringify(candidateRegions));
+    formData.append('candidate_texts', JSON.stringify(candidateTexts));
     const response = await fetch('/process', { method: 'POST', body: formData });
 
     if (!response.ok) {

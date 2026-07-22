@@ -245,6 +245,7 @@ def mask_pdf(
     rules: list[MaskRule],
     image_xrefs: list[int] | None = None,
     regions: list[dict] | None = None,
+    line_texts: list[str] | None = None,
 ) -> int:
     try:
         import fitz  # PyMuPDF
@@ -291,6 +292,18 @@ def mask_pdf(
         for rect in region_map.get(i, []):
             page.add_redact_annot(rect, fill=(0, 0, 0))
             total += 1
+
+        # テキスト候補: 全ページを行単位で走査し、同じ文字列を含む行を黒塗り
+        # （search_forはエンコーディング差で失敗するため、抽出と同じdict方式で照合する）
+        if line_texts:
+            for block in page.get_text("dict").get("blocks", []):
+                if block.get("type") != 0:
+                    continue
+                for line in block.get("lines", []):
+                    text = "".join(sp["text"] for sp in line.get("spans", [])).strip()
+                    if text and any(t in text for t in line_texts):
+                        page.add_redact_annot(fitz.Rect(line["bbox"]), fill=(0, 0, 0))
+                        total += 1
 
         # 画像・ベクターグラフィックにも黒塗りを適用
         try:
@@ -371,10 +384,10 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
 
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".log", ".ini", ".json", ".xml", ".html", ".htm"}
 
-def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None, regions: list[dict] | None = None):
+def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None, regions: list[dict] | None = None, line_texts: list[str] | None = None):
     suffix = input_path.suffix.lower()
     if suffix == ".pdf":
-        count = mask_pdf(input_path, output_path, rules, image_xrefs, regions)
+        count = mask_pdf(input_path, output_path, rules, image_xrefs, regions, line_texts)
         print(f"  [PDF ]  {count:4d}箇所 黒塗り  → {output_path.name}")
     elif suffix == ".docx":
         count = mask_docx(input_path, output_path, rules)

@@ -133,7 +133,13 @@ def process():
     except Exception:
         pass
 
-    if not rules and not image_xrefs and not regions:
+    # テキスト候補の文字列: 全ページ走査で同じ文字列を含む行も黒塗りする
+    try:
+        candidate_texts = [t for t in json.loads(request.form.get("candidate_texts", "[]")) if t.strip()]
+    except Exception:
+        candidate_texts = []
+
+    if not rules and not image_xrefs and not regions and not candidate_texts:
         return jsonify({"error": "有効なマスクルールがありません。値を入力するか自動パターンをONにしてください"}), 400
 
     suffix = Path(file.filename).suffix.lower()
@@ -145,7 +151,8 @@ def process():
     try:
         process_file(tmp_in, tmp_out, rules,
                      image_xrefs if suffix == ".pdf" else None,
-                     regions if suffix == ".pdf" else None)
+                     regions if suffix == ".pdf" else None,
+                     candidate_texts if suffix == ".pdf" else None)
     except Exception as e:
         return jsonify({"error": f"処理エラー: {e}"}), 500
 
