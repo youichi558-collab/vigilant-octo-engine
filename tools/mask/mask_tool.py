@@ -247,7 +247,23 @@ def _norm_char(c: str) -> str:
     return "".join("-" if ch in "‐‑‒–—―−ー－" else ch for ch in c)
 
 
-def _redact_text_occurrences(page, targets: list[str]) -> int:
+def _generalize_pattern(tn: str) -> str:
+    """正規化済み文字列を形式パターン(正規表現)に汎化する。
+    例: '5263-1649F' → r'\\d\\d\\d\\d-\\d\\d\\d\\d[A-Za-z]'
+    数字→\\d、半角英字→[A-Za-z]、その他(記号・日本語)はリテラルのまま。
+    """
+    parts = []
+    for c in tn:
+        if c.isdigit():
+            parts.append(r"\d")
+        elif c.isalpha() and c.isascii():
+            parts.append("[A-Za-z]")
+        else:
+            parts.append(re.escape(c))
+    return "".join(parts)
+
+
+def _redact_text_occurrences(page, targets: list[str], generalize: bool = False) -> int:
     """ページ内の全文字を空白無視で連結し、対象文字列に一致する箇所を黒塗りする。
 
     - テキストが複数のオブジェクトに分割されていても(例: '5'+'ABC-123'+'C')全体をカバー
@@ -256,6 +272,9 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
     - 一致文字がその行の過半を占める場合は行全体を黒塗り
       (図面欄のように1文字ずつ間隔をあけて配置され、シート番号・改訂記号が
        スペースを挟んで同じ欄に入っているケースをカバーする)
+    - generalize=True の場合、対象文字列を形式パターンに汎化して照合する
+      (例: '5263-1649F' → 数字4桁-数字4桁+英字1字 の形式すべてに一致。
+       誤爆防止のため6文字以上の候補のみ汎化し、短い候補はリテラル一致)
     """
     import fitz
 
@@ -265,6 +284,14 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
     target_norms = [norm_str(t) for t in targets if norm_str(t)]
     if not target_norms:
         return 0
+
+    # 照合パターンを構築(リテラル or 汎化形式)
+    patterns: list[re.Pattern] = []
+    for tn in target_norms:
+        if generalize and len(tn) >= 6:
+            patterns.append(re.compile(_generalize_pattern(tn)))
+        else:
+            patterns.append(re.compile(re.escape(tn)))
 
     # sort=True で視覚的な並び順(上→下、左→右)に文字を取得する
     # スペースは「区切りマーカー」として保持する(塗り広げの停止条件に使う)
@@ -309,14 +336,14 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
         return same_row and -h * 0.5 < gap < h * 0.35
 
     count = 0
-    for tn in target_norms:
-        start = 0
-        while True:
-            idx = stream.find(tn, start)
-            if idx < 0:
-                break
+    for pat in patterns:
+        for m in pat.finditer(stream):
+            idx = m.start()
+            mlen = m.end() - m.start()
+            if mlen <= 0:
+                continue
             lo = stream_map[idx]
-            hi = stream_map[idx + len(tn) - 1]
+            hi = stream_map[idx + mlen - 1]
 
             # 前後に密着している文字まで塗り広げる
             # (スペースで停止。テキストオブジェクトの境界は幾何的な隣接判定で越える)
@@ -359,8 +386,6 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
                 page.add_redact_annot(cur + (-1, -1, 1, 1), fill=(0, 0, 0))
                 count += 1
 
-            start = idx + 1
-
     return count
 
 
@@ -371,6 +396,7 @@ def mask_pdf(
     image_xrefs: list[int] | None = None,
     regions: list[dict] | None = None,
     line_texts: list[str] | None = None,
+    generalize: bool = False,
 ) -> int:
     try:
         import fitz  # PyMuPDF
@@ -383,11 +409,17 @@ def mask_pdf(
     xref_set = set(image_xrefs or [])
 
     # 範囲指定黒塗り: allPages=true の場合は全ページに展開
+    # ページサイズが指定元と異なる場合(A4/A3混在等)は比率でスケーリングする
     region_map: dict[int, list] = {}
     for r in (regions or []):
         targets = range(total_pages) if r.get("allPages") else [int(r["page"])]
+        src_w = float(r.get("pdfW", 0)) or None
+        src_h = float(r.get("pdfH", 0)) or None
         for pg in targets:
-            rect = fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
+            pw, ph = doc[pg].rect.width, doc[pg].rect.height
+            sx = pw / src_w if src_w else 1.0
+            sy = ph / src_h if src_h else 1.0
+            rect = fitz.Rect(r["x0"] * sx, r["y0"] * sy, r["x1"] * sx, r["y1"] * sy)
             region_map.setdefault(pg, []).append(rect)
 
     for i, page in enumerate(doc):
@@ -422,7 +454,7 @@ def mask_pdf(
         # （番号が複数のテキストオブジェクトに分割されている場合や
         #   スペース有無の違いがあっても、文字列全体をカバーする）
         if line_texts:
-            total += _redact_text_occurrences(page, line_texts)
+            total += _redact_text_occurrences(page, line_texts, generalize)
 
         # 画像・ベクターグラフィックにも黒塗りを適用
         try:
@@ -503,10 +535,10 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
 
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".log", ".ini", ".json", ".xml", ".html", ".htm"}
 
-def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None, regions: list[dict] | None = None, line_texts: list[str] | None = None):
+def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None, regions: list[dict] | None = None, line_texts: list[str] | None = None, generalize: bool = False):
     suffix = input_path.suffix.lower()
     if suffix == ".pdf":
-        count = mask_pdf(input_path, output_path, rules, image_xrefs, regions, line_texts)
+        count = mask_pdf(input_path, output_path, rules, image_xrefs, regions, line_texts, generalize)
         print(f"  [PDF ]  {count:4d}箇所 黒塗り  → {output_path.name}")
     elif suffix == ".docx":
         count = mask_docx(input_path, output_path, rules)

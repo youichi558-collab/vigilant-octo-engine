@@ -146,6 +146,9 @@ def process():
     except Exception:
         candidate_texts = []
 
+    # 形式マスク: チェックした候補を形式パターンに汎化して全ページ照合
+    generalize = request.form.get("generalize") == "on"
+
     if not rules and not image_xrefs and not regions and not candidate_texts:
         return jsonify({"error": "有効なマスクルールがありません。値を入力するか自動パターンをONにしてください"}), 400
 
@@ -159,7 +162,8 @@ def process():
         process_file(tmp_in, tmp_out, rules,
                      image_xrefs if suffix == ".pdf" else None,
                      regions if suffix == ".pdf" else None,
-                     candidate_texts if suffix == ".pdf" else None)
+                     candidate_texts if suffix == ".pdf" else None,
+                     generalize)
     except Exception as e:
         return jsonify({"error": f"処理エラー: {e}"}), 500
 
