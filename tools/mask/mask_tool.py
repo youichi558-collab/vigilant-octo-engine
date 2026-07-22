@@ -174,7 +174,7 @@ def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = No
     return results
 
 
-def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 10, scale: float = 1.0) -> list[dict]:
+def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 10, scale: float = 1.5) -> list[dict]:
     """PDF各ページをPNG画像としてレンダリングして返す"""
     try:
         import fitz
