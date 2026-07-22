@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 from flask import Flask, jsonify, render_template, request, send_file
 
-from mask_tool import MaskRule, extract_pdf_images, process_file
+from mask_tool import MaskRule, extract_pdf_images, process_file, scan_pdf_candidates
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -60,6 +60,16 @@ def index():
     return render_template("index.html", **config)
 
 
+@app.route("/scan_candidates", methods=["POST"])
+def scan_candidates():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"candidates": []})
+    pdf_bytes = file.read()
+    candidates = scan_pdf_candidates(pdf_bytes)
+    return jsonify({"candidates": candidates})
+
+
 @app.route("/extract_images", methods=["POST"])
 def extract_images():
     file = request.files.get("file")
@@ -78,6 +88,13 @@ def process():
 
     config = parse_config(CONFIG_PATH)
     rules = build_rules(request.form, config["value_rules"], config["pattern_rules"])
+
+    # 候補リストから確定した値を追加
+    for val in request.form.getlist("candidate_val"):
+        val = val.strip()
+        if val:
+            rules.append(MaskRule(pattern=re.compile(re.escape(val)), label="《検出候補》"))
+
     image_xrefs = [int(x) for x in request.form.getlist("img_xref") if x.isdigit()]
 
     if not rules and not image_xrefs:

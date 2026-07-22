@@ -127,6 +127,53 @@ def extract_pdf_images(pdf_bytes: bytes) -> list[dict]:
     return result
 
 
+def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """PDFテキストからマスク候補を検出して返す"""
+    try:
+        import fitz
+    except ImportError:
+        return []
+
+    # スキャン用パターン（会社名・住所は新規、その他は既存パターンから値を拾う）
+    SCAN_PATTERNS = [
+        ("会社名", r"(?:株式会社|有限会社|合同会社|一般社団法人|公益社団法人|特定非営利活動法人)[\w・\-－～（）()]{1,30}"),
+        ("会社名", r"[\w・\-－～（）()]{2,30}(?:株式会社|有限会社|合同会社)"),
+        ("住所",   r"(?:北海道|東京都|大阪府|京都府|神奈川県|埼玉県|千葉県|愛知県|福岡県|兵庫県"
+                   r"|静岡県|茨城県|広島県|宮城県|新潟県|長野県|岐阜県|栃木県|群馬県|岡山県"
+                   r"|三重県|熊本県|鹿児島県|山口県|愛媛県|長崎県|奈良県|青森県|岩手県|大分県"
+                   r"|石川県|山形県|富山県|秋田県|香川県|和歌山県|山梨県|福島県|徳島県|高知県"
+                   r"|島根県|宮崎県|鳥取県|福井県|佐賀県|沖縄県)"
+                   r"[\S]{1,60}(?:市|区|町|村)[\S]{1,40}"),
+        ("電話番号", r"0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
+        ("携帯番号", r"0[789]0[\-－]\d{4}[\-－]\d{4}"),
+        ("FAX番号",  r"FAX[：:\s]*0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
+        ("メール",   r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
+        ("郵便番号", r"〒?\d{3}[\-－]\d{4}"),
+        ("IPアドレス", r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"),
+    ]
+    # 呼び出し元から追加パターンを受け取る場合
+    for ep in (extra_patterns or []):
+        SCAN_PATTERNS.append((ep.get("label", "その他"), ep["pattern"]))
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    full_text = "\n".join(page.get_text() for page in doc)
+    doc.close()
+
+    seen: set[str] = set()
+    results: list[dict] = []
+    for label, pat in SCAN_PATTERNS:
+        try:
+            for m in re.finditer(pat, full_text):
+                val = m.group().strip()
+                if val and val not in seen:
+                    seen.add(val)
+                    results.append({"value": val, "label": label})
+        except re.error:
+            pass
+
+    return results
+
+
 def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None) -> int:
     try:
         import fitz  # PyMuPDF

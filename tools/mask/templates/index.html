@@ -291,6 +291,27 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin-icon { animation: spin 1s linear infinite; font-size: 20px; }
 
+  .candidate-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+  }
+  .candidate-item:last-child { border-bottom: none; }
+  .candidate-item input[type=checkbox] { accent-color: #e63946; width: 15px; height: 15px; flex-shrink: 0; }
+  .candidate-val { flex: 1; font-weight: 600; color: #1a1a2e; word-break: break-all; }
+  .candidate-tag {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: #f0f0f8;
+    color: #555;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
   .tips {
     background: #f8f9ff;
     border: 1px solid #dde0f0;
@@ -371,6 +392,17 @@
       <span id="selectedFileName"></span>
     </div>
 
+    <!-- 候補検出パネル（PDFのみ表示） -->
+    <div id="candidatePanel" style="display:none; margin-bottom:12px;">
+      <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
+        <span style="display:inline-block;width:3px;height:14px;background:#e63946;border-radius:2px;"></span>
+        マスク候補（自動検出）
+        <span style="font-size:11px; font-weight:400; color:#888;">チェックで黒塗り対象に追加</span>
+      </div>
+      <div id="candidateLoading" style="font-size:12px; color:#888; padding:4px 0;">候補を検出中…</div>
+      <div id="candidateList" style="max-height:200px; overflow-y:auto;"></div>
+    </div>
+
     <!-- 画像選択パネル（PDFのみ表示） -->
     <div id="imagePanel" style="display:none;">
       <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
@@ -420,14 +452,11 @@ function onValueInput(el) {
   el.classList.toggle('has-value', el.value.trim().length > 0);
 }
 
-async function onFileSelect(input) {
+function onFileSelect(input) {
   const file = input.files[0];
   const sf = document.getElementById('selectedFile');
   const sfn = document.getElementById('selectedFileName');
   const btn = document.getElementById('btnProcess');
-  const imagePanel = document.getElementById('imagePanel');
-  const imageGrid = document.getElementById('imageGrid');
-  const imageLoading = document.getElementById('imageLoading');
 
   if (file) {
     sfn.textContent = file.name + '  (' + formatSize(file.size) + ')';
@@ -436,66 +465,104 @@ async function onFileSelect(input) {
   } else {
     sf.classList.remove('visible');
     btn.disabled = true;
-    imagePanel.style.display = 'none';
   }
   resetResult();
 
-  // PDFのみ画像抽出
-  if (file && file.name.toLowerCase().endsWith('.pdf')) {
-    imagePanel.style.display = 'block';
-    imageGrid.innerHTML = '';
-    imageLoading.style.display = 'block';
+  const isPdf = file && file.name.toLowerCase().endsWith('.pdf');
 
+  // 候補検出パネル
+  const candidatePanel = document.getElementById('candidatePanel');
+  const candidateList  = document.getElementById('candidateList');
+  const candidateLoading = document.getElementById('candidateLoading');
+  candidatePanel.style.display = isPdf ? 'block' : 'none';
+
+  // 画像パネル
+  const imagePanel   = document.getElementById('imagePanel');
+  const imageGrid    = document.getElementById('imageGrid');
+  const imageLoading = document.getElementById('imageLoading');
+  imagePanel.style.display = isPdf ? 'block' : 'none';
+
+  if (!isPdf) return;
+
+  // --- 候補検出（非同期） ---
+  candidateList.innerHTML = '';
+  candidateLoading.style.display = 'block';
+  (async () => {
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/scan_candidates', { method: 'POST', body: fd });
+      const data = await res.json();
+      candidateLoading.style.display = 'none';
+      if (!data.candidates || data.candidates.length === 0) {
+        candidateList.innerHTML = '<span style="font-size:12px;color:#888;">候補が見つかりませんでした</span>';
+        return;
+      }
+      data.candidates.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'candidate-item';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.name = 'candidate_val';
+        cb.value = c.value;
+        cb.checked = true;
+        const val = document.createElement('span');
+        val.className = 'candidate-val';
+        val.textContent = c.value;
+        const tag = document.createElement('span');
+        tag.className = 'candidate-tag';
+        tag.textContent = c.label;
+        item.appendChild(cb);
+        item.appendChild(val);
+        item.appendChild(tag);
+        candidateList.appendChild(item);
+      });
+    } catch (e) {
+      candidateLoading.style.display = 'none';
+      candidateList.innerHTML = '<span style="font-size:12px;color:#c0392b;">検出エラー</span>';
+    }
+  })();
+
+  // --- 画像抽出（非同期） ---
+  imageGrid.innerHTML = '';
+  imageLoading.style.display = 'block';
+  (async () => {
     try {
       const fd = new FormData();
       fd.append('file', file);
       const res = await fetch('/extract_images', { method: 'POST', body: fd });
       const data = await res.json();
       imageLoading.style.display = 'none';
-
       if (!data.images || data.images.length === 0) {
         imageGrid.innerHTML = '<span style="font-size:12px;color:#888;">画像なし</span>';
         return;
       }
-
       data.images.forEach(img => {
         const wrap = document.createElement('div');
         wrap.style.cssText = 'position:relative;cursor:pointer;border:2px solid #d0d0d8;border-radius:6px;padding:3px;background:#fff;transition:all .15s;';
         wrap.dataset.xref = img.xref;
-
         const thumb = document.createElement('img');
         thumb.src = img.thumbnail;
         thumb.style.cssText = 'display:block;max-width:100px;max-height:100px;border-radius:3px;';
         thumb.title = `${img.width}×${img.height}px`;
-
         const badge = document.createElement('div');
         badge.style.cssText = 'display:none;position:absolute;top:2px;right:2px;background:#e63946;color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;font-weight:700;text-align:center;line-height:18px;';
         badge.textContent = '✓';
-
         wrap.appendChild(thumb);
         wrap.appendChild(badge);
         imageGrid.appendChild(wrap);
-
         wrap.addEventListener('click', () => {
           const selected = wrap.dataset.selected === '1';
-          if (selected) {
-            wrap.dataset.selected = '0';
-            wrap.style.borderColor = '#d0d0d8';
-            badge.style.display = 'none';
-          } else {
-            wrap.dataset.selected = '1';
-            wrap.style.borderColor = '#e63946';
-            badge.style.display = 'block';
-          }
+          wrap.dataset.selected = selected ? '0' : '1';
+          wrap.style.borderColor = selected ? '#d0d0d8' : '#e63946';
+          badge.style.display = selected ? 'none' : 'block';
         });
       });
     } catch (e) {
       imageLoading.style.display = 'none';
       imageGrid.innerHTML = '<span style="font-size:12px;color:#c0392b;">画像読み込みエラー</span>';
     }
-  } else {
-    imagePanel.style.display = 'none';
-  }
+  })();
 }
 
 function formatSize(bytes) {
