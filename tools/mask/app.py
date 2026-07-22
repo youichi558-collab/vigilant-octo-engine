@@ -67,7 +67,7 @@ def render_pages():
     if not file:
         return jsonify({"pages": []})
     pdf_bytes = file.read()
-    pages = render_pdf_pages(pdf_bytes)
+    pages = render_pdf_pages(pdf_bytes, max_pages=1)
     return jsonify({"pages": pages})
 
 
