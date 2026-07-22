@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from flask import Flask, jsonify, render_template, request, send_file
 
-from mask_tool import MaskRule, extract_pdf_images, process_file, render_pdf_pages, scan_pdf_candidates
+from mask_tool import MaskRule, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_pdf_candidates
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -80,7 +80,8 @@ def render_pages():
     page_num = max(0, min(page_num, total - 1))
 
     pages = render_pdf_pages(pdf_bytes, max_pages=1, start_page=page_num)
-    return jsonify({"pages": pages, "total": total})
+    text_lines = extract_page_text_candidates(pdf_bytes, page_num)
+    return jsonify({"pages": pages, "total": total, "text_lines": text_lines})
 
 
 @app.route("/scan_candidates", methods=["POST"])

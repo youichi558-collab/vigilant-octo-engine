@@ -127,6 +127,37 @@ def extract_pdf_images(pdf_bytes: bytes) -> list[dict]:
     return result
 
 
+def extract_page_text_candidates(pdf_bytes: bytes, page_num: int = 0) -> list[str]:
+    """指定ページのテキストを行単位で抽出して返す（重複除去・短行除外）"""
+    try:
+        import fitz
+    except ImportError:
+        return []
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if page_num >= len(doc):
+        doc.close()
+        return []
+
+    page = doc[page_num]
+    blocks = page.get_text("blocks")
+    doc.close()
+
+    seen: set[str] = set()
+    lines: list[str] = []
+    for block in blocks:
+        if block[6] != 0:  # テキストブロック以外はスキップ
+            continue
+        for line in block[4].splitlines():
+            line = line.strip()
+            if len(line) < 2 or line in seen:
+                continue
+            seen.add(line)
+            lines.append(line)
+
+    return lines
+
+
 def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:
     """PDFテキストからマスク候補を検出して返す"""
     try:
