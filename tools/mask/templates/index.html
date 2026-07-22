@@ -461,7 +461,16 @@
         ロゴ・範囲を直接指定（ドラッグで選択）
         <span style="font-size:11px;font-weight:400;color:#888;">全ページ適用</span>
       </div>
-      <div id="pagePreviewLoading" style="font-size:12px;color:#888;padding:4px 0;">ページを読み込み中…</div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <label style="font-size:12px;color:#555;">ページ番号</label>
+        <input id="pageNumInput" type="number" min="1" value="1"
+               style="width:64px;padding:4px 8px;border:1px solid #d0d0d8;border-radius:6px;font-size:13px;"
+               onkeydown="if(event.key==='Enter')loadPreviewPage()">
+        <button type="button" id="loadPageBtn" onclick="loadPreviewPage()"
+                style="padding:4px 12px;background:#1a1a2e;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer;">読込</button>
+        <span id="pageTotalLabel" style="font-size:12px;color:#888;"></span>
+      </div>
+      <div id="pagePreviewLoading" style="font-size:12px;color:#888;padding:4px 0;display:none;">読み込み中…</div>
       <div id="pagePreviewList" style="display:flex; gap:12px; overflow-x:auto; padding:4px 0 6px;"></div>
       <div id="regionTagList" style="margin-top:4px; min-height:24px;"></div>
     </div>
@@ -513,6 +522,78 @@
 <script>
 function onValueInput(el) {
   el.classList.toggle('has-value', el.value.trim().length > 0);
+}
+
+// ---------- ページプレビュー読み込み ----------
+let currentPdfFile = null;
+
+async function loadPreviewPage() {
+  const file = currentPdfFile;
+  if (!file) return;
+
+  const pageNum = parseInt(document.getElementById('pageNumInput').value) || 1;
+  const list    = document.getElementById('pagePreviewList');
+  const loading = document.getElementById('pagePreviewLoading');
+  const totalLbl = document.getElementById('pageTotalLabel');
+
+  list.innerHTML = '';
+  loading.style.display = 'block';
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('page_num', pageNum);
+    const res  = await fetch('/render_pages', { method: 'POST', body: fd });
+    const data = await res.json();
+    loading.style.display = 'none';
+
+    if (data.total) {
+      totalLbl.textContent = `/ ${data.total} ページ`;
+      document.getElementById('pageNumInput').max = data.total;
+    }
+
+    if (!data.pages || data.pages.length === 0) {
+      list.innerHTML = '<span style="font-size:12px;color:#888;">ページなし</span>';
+      return;
+    }
+
+    data.pages.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'page-card';
+
+      const lbl = document.createElement('div');
+      lbl.className = 'page-card-label';
+      lbl.textContent = `ページ ${p.page + 1}`;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'page-img-wrap';
+
+      const img = document.createElement('img');
+      img.src = p.image;
+      img.dataset.pdfW = p.pdf_width;
+      img.dataset.pdfH = p.pdf_height;
+      img.draggable = false;
+
+      const canvas = document.createElement('canvas');
+
+      wrap.appendChild(img);
+      wrap.appendChild(canvas);
+      card.appendChild(lbl);
+      card.appendChild(wrap);
+      list.appendChild(card);
+
+      img.onload = () => {
+        canvas.width  = img.offsetWidth  || 340;
+        canvas.height = img.offsetHeight || Math.round(340 * p.pdf_height / p.pdf_width);
+        setupPageCanvas(canvas, p.page, p.pdf_width, p.pdf_height);
+        drawRegionsOnCanvas(canvas, p.page);
+      };
+      if (img.complete) img.onload();
+    });
+  } catch (e) {
+    loading.style.display = 'none';
+    list.innerHTML = '<span style="font-size:12px;color:#c0392b;">読み込みエラー</span>';
+  }
 }
 
 // ---------- 範囲選択 ----------
@@ -641,6 +722,7 @@ function onFileSelect(input) {
   resetResult();
 
   // 範囲選択リセット
+  currentPdfFile = file || null;
   selectedRegions = [];
   refreshRegionTags();
 
@@ -666,58 +748,9 @@ function onFileSelect(input) {
 
   if (!isPdf) return;
 
-  // --- ページプレビュー（非同期） ---
-  pagePreviewList.innerHTML = '';
-  pagePreviewLoading.style.display = 'block';
-  (async () => {
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/render_pages', { method: 'POST', body: fd });
-      const data = await res.json();
-      pagePreviewLoading.style.display = 'none';
-      if (!data.pages || data.pages.length === 0) {
-        pagePreviewList.innerHTML = '<span style="font-size:12px;color:#888;">ページなし</span>';
-        return;
-      }
-      data.pages.forEach(p => {
-        const card = document.createElement('div');
-        card.className = 'page-card';
-
-        const lbl = document.createElement('div');
-        lbl.className = 'page-card-label';
-        lbl.textContent = `ページ ${p.page + 1}`;
-
-        const wrap = document.createElement('div');
-        wrap.className = 'page-img-wrap';
-
-        const img = document.createElement('img');
-        img.src = p.image;
-        img.dataset.pdfW = p.pdf_width;
-        img.dataset.pdfH = p.pdf_height;
-        img.draggable = false;
-
-        const canvas = document.createElement('canvas');
-
-        wrap.appendChild(img);
-        wrap.appendChild(canvas);
-        card.appendChild(lbl);
-        card.appendChild(wrap);
-        pagePreviewList.appendChild(card);
-
-        img.onload = () => {
-          canvas.width  = img.offsetWidth  || 200;
-          canvas.height = img.offsetHeight || Math.round(200 * p.pdf_height / p.pdf_width);
-          setupPageCanvas(canvas, p.page, p.pdf_width, p.pdf_height);
-          drawRegionsOnCanvas(canvas, p.page);
-        };
-        if (img.complete) img.onload();
-      });
-    } catch (e) {
-      pagePreviewLoading.style.display = 'none';
-      pagePreviewList.innerHTML = '<span style="font-size:12px;color:#c0392b;">読み込みエラー</span>';
-    }
-  })();
+  // ページプレビュー初回読み込み
+  document.getElementById('pageNumInput').value = 1;
+  loadPreviewPage();
 
   // --- 候補検出（非同期） ---
   candidateList.innerHTML = '';

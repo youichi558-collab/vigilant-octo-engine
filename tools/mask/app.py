@@ -65,10 +65,22 @@ def index():
 def render_pages():
     file = request.files.get("file")
     if not file:
-        return jsonify({"pages": []})
+        return jsonify({"pages": [], "total": 0})
     pdf_bytes = file.read()
-    pages = render_pdf_pages(pdf_bytes, max_pages=1)
-    return jsonify({"pages": pages})
+
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        total = len(doc)
+        doc.close()
+    except Exception:
+        total = 0
+
+    page_num = int(request.form.get("page_num", 1)) - 1  # 0-indexed
+    page_num = max(0, min(page_num, total - 1))
+
+    pages = render_pdf_pages(pdf_bytes, max_pages=1, start_page=page_num)
+    return jsonify({"pages": pages, "total": total})
 
 
 @app.route("/scan_candidates", methods=["POST"])
