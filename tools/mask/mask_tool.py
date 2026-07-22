@@ -85,7 +85,96 @@ def mask_text_file(input_path: Path, output_path: Path, rules: list[MaskRule]) -
 
 # ---------- PDF ----------
 
-def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
+def extract_pdf_images(pdf_bytes: bytes) -> list[dict]:
+    """PDF内の画像を抽出してbase64サムネイル付きで返す"""
+    try:
+        import fitz
+    except ImportError:
+        return []
+    try:
+        from PIL import Image as PilImage
+        import io, base64
+    except ImportError:
+        return []
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    seen: set[int] = set()
+    result = []
+
+    for page in doc:
+        for img in page.get_images():
+            xref = img[0]
+            if xref in seen:
+                continue
+            seen.add(xref)
+            try:
+                img_data = doc.extract_image(xref)
+                pil = PilImage.open(io.BytesIO(img_data["image"]))
+                pil.thumbnail((120, 120))
+                buf = io.BytesIO()
+                pil.save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                result.append({
+                    "xref": xref,
+                    "width": img_data["width"],
+                    "height": img_data["height"],
+                    "thumbnail": f"data:image/png;base64,{b64}",
+                })
+            except Exception:
+                pass
+
+    doc.close()
+    return result
+
+
+def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """PDFテキストからマスク候補を検出して返す"""
+    try:
+        import fitz
+    except ImportError:
+        return []
+
+    # スキャン用パターン（会社名・住所は新規、その他は既存パターンから値を拾う）
+    SCAN_PATTERNS = [
+        ("会社名", r"(?:株式会社|有限会社|合同会社|一般社団法人|公益社団法人|特定非営利活動法人)[\w・\-－～（）()]{1,30}"),
+        ("会社名", r"[\w・\-－～（）()]{2,30}(?:株式会社|有限会社|合同会社)"),
+        ("住所",   r"(?:北海道|東京都|大阪府|京都府|神奈川県|埼玉県|千葉県|愛知県|福岡県|兵庫県"
+                   r"|静岡県|茨城県|広島県|宮城県|新潟県|長野県|岐阜県|栃木県|群馬県|岡山県"
+                   r"|三重県|熊本県|鹿児島県|山口県|愛媛県|長崎県|奈良県|青森県|岩手県|大分県"
+                   r"|石川県|山形県|富山県|秋田県|香川県|和歌山県|山梨県|福島県|徳島県|高知県"
+                   r"|島根県|宮崎県|鳥取県|福井県|佐賀県|沖縄県)"
+                   r"[\S]{1,60}(?:市|区|町|村)[\S]{1,40}"),
+        ("電話番号", r"0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
+        ("携帯番号", r"0[789]0[\-－]\d{4}[\-－]\d{4}"),
+        ("FAX番号",  r"FAX[：:\s]*0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
+        ("メール",   r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
+        ("郵便番号", r"〒?\d{3}[\-－]\d{4}"),
+        ("IPアドレス", r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"),
+    ]
+    # 呼び出し元から追加パターンを受け取る場合
+    for ep in (extra_patterns or []):
+        SCAN_PATTERNS.append((ep.get("label", "その他"), ep["pattern"]))
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    full_text = "\n".join(page.get_text() for page in doc)
+    doc.close()
+
+    seen: set[str] = set()
+    results: list[dict] = []
+    for label, pat in SCAN_PATTERNS:
+        try:
+            for m in re.finditer(pat, full_text):
+                val = m.group().strip()
+                if val and val not in seen:
+                    seen.add(val)
+                    results.append({"value": val, "label": label})
+        except re.error:
+            pass
+
+    return results
+
+
+def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None) -> int:
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -93,20 +182,30 @@ def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
 
     doc = fitz.open(str(input_path))
     total = 0
+    xref_set = set(image_xrefs or [])
 
     for page in doc:
+        # テキスト黒塗り
         page_text = page.get_text()
         matched_strings: set[str] = set()
-
         for rule in rules:
             for m in rule.pattern.finditer(page_text):
                 matched_strings.add(m.group())
-
         for s in matched_strings:
-            instances = page.search_for(s)
-            for rect in instances:
+            for rect in page.search_for(s):
                 page.add_redact_annot(rect, fill=(0, 0, 0))
                 total += 1
+
+        # 画像黒塗り
+        for img in page.get_images():
+            xref = img[0]
+            if xref in xref_set:
+                try:
+                    bbox = page.get_image_bbox(img)
+                    page.add_redact_annot(bbox, fill=(0, 0, 0))
+                    total += 1
+                except Exception:
+                    pass
 
         page.apply_redactions()
 
@@ -180,10 +279,10 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
 
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".log", ".ini", ".json", ".xml", ".html", ".htm"}
 
-def process_file(input_path: Path, output_path: Path, rules: list[MaskRule]):
+def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None):
     suffix = input_path.suffix.lower()
     if suffix == ".pdf":
-        count = mask_pdf(input_path, output_path, rules)
+        count = mask_pdf(input_path, output_path, rules, image_xrefs)
         print(f"  [PDF ]  {count:4d}箇所 黒塗り  → {output_path.name}")
     elif suffix == ".docx":
         count = mask_docx(input_path, output_path, rules)
