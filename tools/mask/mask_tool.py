@@ -255,9 +255,16 @@ def mask_pdf(
             page.add_redact_annot(rect, fill=(0, 0, 0))
             total += 1
 
-        page.apply_redactions()
+        # 画像・ベクターグラフィックにも黒塗りを適用
+        try:
+            page.apply_redactions(
+                images=fitz.PDF_REDACT_IMAGE_PIXELS,
+                graphics=fitz.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+            )
+        except TypeError:
+            page.apply_redactions()
 
-    doc.save(str(output_path))
+    doc.save(str(output_path), garbage=4, deflate=True)
     doc.close()
     return total
 
