@@ -557,17 +557,17 @@ async function loadPreviewPage() {
     candidateLoading.style.display = 'none';
     candidateList.innerHTML = '';
     if (data.text_lines && data.text_lines.length > 0) {
-      data.text_lines.forEach(line => {
+      data.text_lines.forEach(entry => {
         const item = document.createElement('div');
         item.className = 'candidate-item';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
-        cb.name = 'candidate_val';
-        cb.value = line;
         cb.checked = false;
+        cb.dataset.bbox = JSON.stringify(entry.bbox);
+        cb.dataset.page = entry.page;
         const val = document.createElement('span');
         val.className = 'candidate-val';
-        val.textContent = line;
+        val.textContent = entry.text;
         item.appendChild(cb);
         item.appendChild(val);
         candidateList.appendChild(item);
@@ -864,6 +864,17 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
     });
     // 範囲指定を追加
     formData.append('regions', JSON.stringify(selectedRegions));
+    // テキスト候補のbboxをregionsとして追加
+    const candidateRegions = [];
+    document.querySelectorAll('#candidateList input[type=checkbox]:checked').forEach(cb => {
+      const bbox = JSON.parse(cb.dataset.bbox);
+      candidateRegions.push({
+        page: parseInt(cb.dataset.page),
+        x0: bbox[0], y0: bbox[1], x1: bbox[2], y1: bbox[3],
+        allPages: false,
+      });
+    });
+    formData.append('candidate_regions', JSON.stringify(candidateRegions));
     const response = await fetch('/process', { method: 'POST', body: formData });
 
     if (!response.ok) {

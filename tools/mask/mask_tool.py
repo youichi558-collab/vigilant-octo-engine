@@ -127,8 +127,8 @@ def extract_pdf_images(pdf_bytes: bytes) -> list[dict]:
     return result
 
 
-def extract_page_text_candidates(pdf_bytes: bytes, page_num: int = 0) -> list[str]:
-    """指定ページのテキストを行単位で抽出して返す（重複除去・短行除外）"""
+def extract_page_text_candidates(pdf_bytes: bytes, page_num: int = 0) -> list[dict]:
+    """指定ページのテキストを行単位で抽出し、座標付きで返す（重複除去・短行除外）"""
     try:
         import fitz
     except ImportError:
@@ -140,22 +140,28 @@ def extract_page_text_candidates(pdf_bytes: bytes, page_num: int = 0) -> list[st
         return []
 
     page = doc[page_num]
-    blocks = page.get_text("blocks")
+    data = page.get_text("dict")
     doc.close()
 
     seen: set[str] = set()
-    lines: list[str] = []
-    for block in blocks:
-        if block[6] != 0:  # テキストブロック以外はスキップ
-            continue
-        for line in block[4].splitlines():
-            line = line.strip()
-            if len(line) < 2 or line in seen:
-                continue
-            seen.add(line)
-            lines.append(line)
+    results: list[dict] = []
 
-    return lines
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:  # テキストブロック以外はスキップ
+            continue
+        for line in block.get("lines", []):
+            text = "".join(span["text"] for span in line.get("spans", [])).strip()
+            if len(text) < 2 or text in seen:
+                continue
+            seen.add(text)
+            bbox = line["bbox"]  # (x0, y0, x1, y1)
+            results.append({
+                "text": text,
+                "bbox": list(bbox),
+                "page": page_num,
+            })
+
+    return results
 
 
 def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:

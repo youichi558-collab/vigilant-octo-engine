@@ -126,6 +126,13 @@ def process():
     except Exception:
         regions = []
 
+    # テキスト候補のbboxもregionsに追加（テキスト検索より確実）
+    try:
+        candidate_regions = json.loads(request.form.get("candidate_regions", "[]"))
+        regions.extend(candidate_regions)
+    except Exception:
+        pass
+
     if not rules and not image_xrefs and not regions:
         return jsonify({"error": "有効なマスクルールがありません。値を入力するか自動パターンをONにしてください"}), 400
 
