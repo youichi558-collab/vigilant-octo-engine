@@ -312,6 +312,57 @@
     flex-shrink: 0;
   }
 
+  .page-card {
+    flex-shrink: 0;
+    width: 200px;
+  }
+  .page-card-label {
+    font-size: 11px;
+    color: #666;
+    margin-bottom: 4px;
+  }
+  .page-img-wrap {
+    position: relative;
+    display: inline-block;
+    width: 100%;
+    cursor: crosshair;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    overflow: hidden;
+    user-select: none;
+  }
+  .page-img-wrap img {
+    display: block;
+    width: 100%;
+    pointer-events: none;
+  }
+  .page-img-wrap canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+  }
+  .region-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    background: #fff0f0;
+    border: 1px solid #f5a0a0;
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin: 2px;
+    color: #c0392b;
+  }
+  .region-tag button {
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: #c0392b;
+    font-size: 12px;
+    padding: 0;
+    line-height: 1;
+  }
+
   .tips {
     background: #f8f9ff;
     border: 1px solid #dde0f0;
@@ -403,6 +454,18 @@
       <div id="candidateList" style="max-height:200px; overflow-y:auto;"></div>
     </div>
 
+    <!-- ページプレビュー・範囲選択パネル（PDFのみ） -->
+    <div id="pagePreviewPanel" style="display:none; margin-bottom:12px;">
+      <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
+        <span style="display:inline-block;width:3px;height:14px;background:#e63946;border-radius:2px;"></span>
+        ロゴ・範囲を直接指定（ドラッグで選択）
+        <span style="font-size:11px;font-weight:400;color:#888;">全ページ適用</span>
+      </div>
+      <div id="pagePreviewLoading" style="font-size:12px;color:#888;padding:4px 0;">ページを読み込み中…</div>
+      <div id="pagePreviewList" style="display:flex; gap:12px; overflow-x:auto; padding:4px 0 6px;"></div>
+      <div id="regionTagList" style="margin-top:4px; min-height:24px;"></div>
+    </div>
+
     <!-- 画像選択パネル（PDFのみ表示） -->
     <div id="imagePanel" style="display:none;">
       <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
@@ -452,6 +515,115 @@ function onValueInput(el) {
   el.classList.toggle('has-value', el.value.trim().length > 0);
 }
 
+// ---------- 範囲選択 ----------
+let selectedRegions = []; // {id, page, x0, y0, x1, y1, allPages, pdfW, pdfH}
+let regionIdSeq = 0;
+
+function addRegion(page, x0, y0, x1, y1, pdfW, pdfH) {
+  const id = regionIdSeq++;
+  selectedRegions.push({ id, page, x0, y0, x1, y1, allPages: true, pdfW, pdfH });
+  refreshRegionTags();
+  redrawAllCanvases();
+}
+
+function removeRegion(id) {
+  selectedRegions = selectedRegions.filter(r => r.id !== id);
+  refreshRegionTags();
+  redrawAllCanvases();
+}
+
+function refreshRegionTags() {
+  const list = document.getElementById('regionTagList');
+  list.innerHTML = '';
+  selectedRegions.forEach(r => {
+    const tag = document.createElement('span');
+    tag.className = 'region-tag';
+    tag.innerHTML = `P${r.page + 1} 範囲${r.id + 1}（全ページ適用）<button onclick="removeRegion(${r.id})">✕</button>`;
+    list.appendChild(tag);
+  });
+}
+
+function redrawAllCanvases() {
+  document.querySelectorAll('#pagePreviewList canvas').forEach(canvas => {
+    const pageNum = parseInt(canvas.dataset.page);
+    drawRegionsOnCanvas(canvas, pageNum);
+  });
+}
+
+function drawRegionsOnCanvas(canvas, pageNum, tempRect) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const img = canvas.previousElementSibling; // img直後のcanvas
+  const scaleX = canvas.width / parseFloat(img.dataset.pdfW);
+  const scaleY = canvas.height / parseFloat(img.dataset.pdfH);
+
+  // 確定済み範囲
+  selectedRegions.forEach(r => {
+    const applies = r.allPages || r.page === pageNum;
+    if (!applies) return;
+    ctx.fillStyle = 'rgba(230,57,70,0.35)';
+    ctx.fillRect(r.x0 * scaleX, r.y0 * scaleY, (r.x1 - r.x0) * scaleX, (r.y1 - r.y0) * scaleY);
+    ctx.strokeStyle = '#e63946';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(r.x0 * scaleX, r.y0 * scaleY, (r.x1 - r.x0) * scaleX, (r.y1 - r.y0) * scaleY);
+  });
+
+  // ドラッグ中
+  if (tempRect) {
+    ctx.strokeStyle = '#e63946';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(tempRect.x, tempRect.y, tempRect.w, tempRect.h);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(230,57,70,0.15)';
+    ctx.fillRect(tempRect.x, tempRect.y, tempRect.w, tempRect.h);
+  }
+}
+
+function setupPageCanvas(canvas, pageNum, pdfW, pdfH) {
+  canvas.dataset.page = pageNum;
+  let drawing = false, sx = 0, sy = 0;
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  canvas.addEventListener('mousedown', e => {
+    drawing = true;
+    const p = getPos(e);
+    sx = p.x; sy = p.y;
+  });
+
+  canvas.addEventListener('mousemove', e => {
+    if (!drawing) return;
+    const p = getPos(e);
+    const temp = { x: Math.min(sx, p.x), y: Math.min(sy, p.y), w: Math.abs(p.x - sx), h: Math.abs(p.y - sy) };
+    drawRegionsOnCanvas(canvas, pageNum, temp);
+  });
+
+  canvas.addEventListener('mouseup', e => {
+    if (!drawing) return;
+    drawing = false;
+    const p = getPos(e);
+    const w = Math.abs(p.x - sx), h = Math.abs(p.y - sy);
+    if (w < 5 || h < 5) { drawRegionsOnCanvas(canvas, pageNum); return; }
+
+    const scaleX = pdfW / canvas.width;
+    const scaleY = pdfH / canvas.height;
+    addRegion(
+      pageNum,
+      Math.min(sx, p.x) * scaleX, Math.min(sy, p.y) * scaleY,
+      Math.max(sx, p.x) * scaleX, Math.max(sy, p.y) * scaleY,
+      pdfW, pdfH
+    );
+  });
+}
+
 function onFileSelect(input) {
   const file = input.files[0];
   const sf = document.getElementById('selectedFile');
@@ -468,6 +640,10 @@ function onFileSelect(input) {
   }
   resetResult();
 
+  // 範囲選択リセット
+  selectedRegions = [];
+  refreshRegionTags();
+
   const isPdf = file && file.name.toLowerCase().endsWith('.pdf');
 
   // 候補検出パネル
@@ -476,6 +652,12 @@ function onFileSelect(input) {
   const candidateLoading = document.getElementById('candidateLoading');
   candidatePanel.style.display = isPdf ? 'block' : 'none';
 
+  // ページプレビューパネル
+  const pagePreviewPanel   = document.getElementById('pagePreviewPanel');
+  const pagePreviewLoading = document.getElementById('pagePreviewLoading');
+  const pagePreviewList    = document.getElementById('pagePreviewList');
+  pagePreviewPanel.style.display = isPdf ? 'block' : 'none';
+
   // 画像パネル
   const imagePanel   = document.getElementById('imagePanel');
   const imageGrid    = document.getElementById('imageGrid');
@@ -483,6 +665,59 @@ function onFileSelect(input) {
   imagePanel.style.display = isPdf ? 'block' : 'none';
 
   if (!isPdf) return;
+
+  // --- ページプレビュー（非同期） ---
+  pagePreviewList.innerHTML = '';
+  pagePreviewLoading.style.display = 'block';
+  (async () => {
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/render_pages', { method: 'POST', body: fd });
+      const data = await res.json();
+      pagePreviewLoading.style.display = 'none';
+      if (!data.pages || data.pages.length === 0) {
+        pagePreviewList.innerHTML = '<span style="font-size:12px;color:#888;">ページなし</span>';
+        return;
+      }
+      data.pages.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'page-card';
+
+        const lbl = document.createElement('div');
+        lbl.className = 'page-card-label';
+        lbl.textContent = `ページ ${p.page + 1}`;
+
+        const wrap = document.createElement('div');
+        wrap.className = 'page-img-wrap';
+
+        const img = document.createElement('img');
+        img.src = p.image;
+        img.dataset.pdfW = p.pdf_width;
+        img.dataset.pdfH = p.pdf_height;
+        img.draggable = false;
+
+        const canvas = document.createElement('canvas');
+
+        wrap.appendChild(img);
+        wrap.appendChild(canvas);
+        card.appendChild(lbl);
+        card.appendChild(wrap);
+        pagePreviewList.appendChild(card);
+
+        img.onload = () => {
+          canvas.width  = img.offsetWidth  || 200;
+          canvas.height = img.offsetHeight || Math.round(200 * p.pdf_height / p.pdf_width);
+          setupPageCanvas(canvas, p.page, p.pdf_width, p.pdf_height);
+          drawRegionsOnCanvas(canvas, p.page);
+        };
+        if (img.complete) img.onload();
+      });
+    } catch (e) {
+      pagePreviewLoading.style.display = 'none';
+      pagePreviewList.innerHTML = '<span style="font-size:12px;color:#c0392b;">読み込みエラー</span>';
+    }
+  })();
 
   // --- 候補検出（非同期） ---
   candidateList.innerHTML = '';
@@ -605,6 +840,8 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
     document.querySelectorAll('#imageGrid [data-selected="1"]').forEach(el => {
       formData.append('img_xref', el.dataset.xref);
     });
+    // 範囲指定を追加
+    formData.append('regions', JSON.stringify(selectedRegions));
     const response = await fetch('/process', { method: 'POST', body: formData });
 
     if (!response.ok) {

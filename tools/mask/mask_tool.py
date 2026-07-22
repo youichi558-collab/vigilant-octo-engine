@@ -174,17 +174,59 @@ def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = No
     return results
 
 
-def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None) -> int:
+def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 10, scale: float = 1.0) -> list[dict]:
+    """PDF各ページをPNG画像としてレンダリングして返す"""
+    try:
+        import fitz
+        import base64
+    except ImportError:
+        return []
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    mat = fitz.Matrix(scale, scale)
+    pages = []
+
+    for i in range(min(len(doc), max_pages)):
+        page = doc[i]
+        pix = page.get_pixmap(matrix=mat)
+        b64 = base64.b64encode(pix.tobytes("png")).decode()
+        pages.append({
+            "page": i,
+            "pdf_width": page.rect.width,
+            "pdf_height": page.rect.height,
+            "image": f"data:image/png;base64,{b64}",
+        })
+
+    doc.close()
+    return pages
+
+
+def mask_pdf(
+    input_path: Path,
+    output_path: Path,
+    rules: list[MaskRule],
+    image_xrefs: list[int] | None = None,
+    regions: list[dict] | None = None,
+) -> int:
     try:
         import fitz  # PyMuPDF
     except ImportError:
         sys.exit("エラー: pip install pymupdf が必要です")
 
     doc = fitz.open(str(input_path))
+    total_pages = len(doc)
     total = 0
     xref_set = set(image_xrefs or [])
 
-    for page in doc:
+    # 範囲指定黒塗り: allPages=true の場合は全ページに展開
+    region_map: dict[int, list] = {}
+    for r in (regions or []):
+        targets = range(total_pages) if r.get("allPages") else [int(r["page"])]
+        for pg in targets:
+            rect = fitz.Rect(r["x0"], r["y0"], r["x1"], r["y1"])
+            region_map.setdefault(pg, []).append(rect)
+
+    for i, page in enumerate(doc):
         # テキスト黒塗り
         page_text = page.get_text()
         matched_strings: set[str] = set()
@@ -206,6 +248,11 @@ def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule], image_x
                     total += 1
                 except Exception:
                     pass
+
+        # 範囲指定黒塗り
+        for rect in region_map.get(i, []):
+            page.add_redact_annot(rect, fill=(0, 0, 0))
+            total += 1
 
         page.apply_redactions()
 
@@ -279,10 +326,10 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
 
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".log", ".ini", ".json", ".xml", ".html", ".htm"}
 
-def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None):
+def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None, regions: list[dict] | None = None):
     suffix = input_path.suffix.lower()
     if suffix == ".pdf":
-        count = mask_pdf(input_path, output_path, rules, image_xrefs)
+        count = mask_pdf(input_path, output_path, rules, image_xrefs, regions)
         print(f"  [PDF ]  {count:4d}箇所 黒塗り  → {output_path.name}")
     elif suffix == ".docx":
         count = mask_docx(input_path, output_path, rules)
