@@ -26,6 +26,13 @@ app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
 CONFIG_PATH = Path(__file__).parent / "mask_config.yaml"
 
 
+@app.after_request
+def no_cache(response):
+    """ブラウザが古いUIをキャッシュして修正が反映されない事故を防ぐ"""
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def parse_config(config_path: Path) -> dict:
     """YAMLを読み込み、value規則とpattern規則に分けて返す"""
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
