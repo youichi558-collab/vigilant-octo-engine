@@ -247,50 +247,6 @@ def _norm_char(c: str) -> str:
     return "".join("-" if ch in "‐‑‒–—―−ー－" else ch for ch in c)
 
 
-def _vertical_borders(page) -> list[tuple[float, float, float]]:
-    """ページ内のベクター縦罫線を (x, y0, y1) のリストで返す(表・図面欄のセル境界検出用)"""
-    borders = []
-    try:
-        drawings = page.get_drawings()
-    except Exception:
-        return borders
-    for path in drawings:
-        for item in path.get("items", []):
-            try:
-                if item[0] == "l":
-                    p1, p2 = item[1], item[2]
-                    if abs(p1.x - p2.x) < 0.5 and abs(p1.y - p2.y) > 2:
-                        borders.append((p1.x, min(p1.y, p2.y), max(p1.y, p2.y)))
-                elif item[0] == "re":
-                    r = item[1]
-                    if r.height > 2:
-                        borders.append((r.x0, r.y0, r.y1))
-                        borders.append((r.x1, r.y0, r.y1))
-            except Exception:
-                pass
-    return borders
-
-
-def _expand_to_cell(page, rect, borders, max_width_ratio: float = 0.6):
-    """rectを含むセルの左右罫線まで水平方向に広げたrectを返す(高さは変えない)"""
-    import fitz
-    yc = (rect.y0 + rect.y1) / 2
-    left = None
-    right = None
-    for x, y0, y1 in borders:
-        if not (y0 - 1 <= yc <= y1 + 1):
-            continue
-        if x <= rect.x0 + 1:
-            left = x if left is None else max(left, x)
-        elif x >= rect.x1 - 1:
-            right = x if right is None else min(right, x)
-    if left is None or right is None:
-        return rect
-    if (right - left) > page.rect.width * max_width_ratio:
-        return rect
-    return fitz.Rect(left, rect.y0, right, rect.y1)
-
-
 def _redact_text_occurrences(page, targets: list[str]) -> int:
     """ページ内の全文字を空白無視で連結し、対象文字列に一致する箇所を黒塗りする。
 
@@ -352,7 +308,6 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
         gap = b.x0 - a.x1
         return same_row and -h * 0.5 < gap < h * 0.35
 
-    borders = _vertical_borders(page)
     count = 0
     for tn in target_norms:
         start = 0
@@ -387,30 +342,8 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
                     char_rects.extend(items[i][1] for i in range(lo, hi + 1)
                                       if items[i][1] is not None and items[i][2] == line_id)
 
-            # 同じ段にスペースを挟んで並ぶ短い断片行(シート番号・改訂記号など)まで塗り広げる
-            # 長いラベル行(Drawing No.等)は文字数条件で除外される
-            if covered_lines:
-                changed = True
-                while changed:
-                    changed = False
-                    for lid, lb in enumerate(line_bboxes):
-                        if lid in covered_lines or line_char_counts[lid] == 0 or line_char_counts[lid] > 3:
-                            continue
-                        for cid in covered_lines:
-                            cb = line_bboxes[cid]
-                            h = max(lb.height, cb.height)
-                            same_row = min(lb.y1, cb.y1) - max(lb.y0, cb.y0) > h * 0.5
-                            gap = max(lb.x0, cb.x0) - min(lb.x1, cb.x1)
-                            if same_row and gap < h * 2.0:
-                                covered_lines.add(lid)
-                                changed = True
-                                break
-
             for line_id in covered_lines:
-                # 罫線で囲まれた欄(セル)の場合、左右の罫線まで塗り広げる
-                # (シート番号・改訂記号がどれだけ離れていても同じ欄内なら塗られる)
-                rect = _expand_to_cell(page, line_bboxes[line_id], borders)
-                page.add_redact_annot(rect + (-1, -1, 1, 1), fill=(0, 0, 0))
+                page.add_redact_annot(line_bboxes[line_id] + (-1, -1, 1, 1), fill=(0, 0, 0))
                 count += 1
 
             if char_rects:
