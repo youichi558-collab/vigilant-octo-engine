@@ -239,23 +239,33 @@ def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 10, scale: float = 1.5, 
     return pages
 
 
-def _redact_text_occurrences(page, targets: list[str]) -> int:
-    """ページ内の全文字を空白無視で連結し、対象文字列に一致する文字のbboxを黒塗りする。
+def _norm_char(c: str) -> str:
+    """照合用の文字正規化: 全角/半角の差・ハイフン類の字種差を吸収する"""
+    import unicodedata
+    c = unicodedata.normalize("NFKC", c)
+    # ハイフン・ダッシュ類はすべて '-' に寄せる
+    return "".join("-" if ch in "‐‑‒–—―−ー－" else ch for ch in c)
 
-    テキストが複数のオブジェクトに分割されていたり(例: '5'+'ABC-123'+'C')、
-    スペースの入り方が場所によって違っても、文字列全体をカバーできる。
+
+def _redact_text_occurrences(page, targets: list[str]) -> int:
+    """ページ内の全文字を空白無視で連結し、対象文字列に一致する箇所を黒塗りする。
+
+    - テキストが複数のオブジェクトに分割されていても(例: '5'+'ABC-123'+'C')全体をカバー
+    - 全角/半角・ハイフン字種の違いを正規化して照合
+    - 一致部分の前後にスペースなしで密着している文字(枝番・改訂記号など)も塗り広げる
     """
     import fitz
 
-    def norm(s: str) -> str:
-        return "".join(s.split())
+    def norm_str(s: str) -> str:
+        return "".join(_norm_char(c) for c in s if not c.isspace())
 
-    target_norms = [norm(t) for t in targets if norm(t)]
+    target_norms = [norm_str(t) for t in targets if norm_str(t)]
     if not target_norms:
         return 0
 
     # sort=True で視覚的な並び順(上→下、左→右)に文字を取得する
-    chars: list[tuple[str, "fitz.Rect"]] = []
+    # スペースは「区切りマーカー」として保持する(塗り広げの停止条件に使う)
+    items: list[tuple[str, "fitz.Rect | None"]] = []  # (char, rect) スペースはrect=None
     for block in page.get_text("rawdict", sort=True).get("blocks", []):
         if block.get("type") != 0:
             continue
@@ -263,20 +273,49 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
             for span in line.get("spans", []):
                 for ch in span.get("chars", []):
                     c = ch.get("c", "")
-                    if not c or c.isspace():
+                    if not c:
                         continue
-                    chars.append((c, fitz.Rect(ch["bbox"])))
+                    if c.isspace():
+                        items.append((" ", None))
+                    else:
+                        items.append((c, fitz.Rect(ch["bbox"])))
+            items.append((" ", None))  # 行末も区切り扱い
 
-    stream = "".join(c for c, _ in chars)
+    # 正規化ストリームと、各位置→itemsインデックスの対応表を作る
+    stream_chars: list[str] = []
+    stream_map: list[int] = []
+    for i, (c, rect) in enumerate(items):
+        if rect is None:
+            continue
+        for nc in _norm_char(c):
+            stream_chars.append(nc)
+            stream_map.append(i)
+    stream = "".join(stream_chars)
+
     count = 0
-
     for tn in target_norms:
         start = 0
         while True:
             idx = stream.find(tn, start)
             if idx < 0:
                 break
-            rects = [chars[i][1] for i in range(idx, idx + len(tn))]
+            lo = stream_map[idx]
+            hi = stream_map[idx + len(tn) - 1]
+
+            # 前後に密着している文字まで塗り広げる
+            # (スペースで停止。テキストオブジェクトの境界は幾何的な隣接判定で越える)
+            def _adjacent(a, b):  # aがbの左隣か
+                h = max(a.height, b.height)
+                same_row = abs((a.y0 + a.y1) - (b.y0 + b.y1)) / 2 < h * 0.7
+                gap = b.x0 - a.x1
+                return same_row and -h * 0.5 < gap < h * 0.35
+
+            while lo - 1 >= 0 and items[lo - 1][1] is not None and _adjacent(items[lo - 1][1], items[lo][1]):
+                lo -= 1
+            while hi + 1 < len(items) and items[hi + 1][1] is not None and _adjacent(items[hi][1], items[hi + 1][1]):
+                hi += 1
+
+            rects = [items[i][1] for i in range(lo, hi + 1) if items[i][1] is not None]
             # 同じ行にある文字のbboxは1つの矩形にまとめ、行が変わったら分ける
             cur = fitz.Rect(rects[0])
             for r in rects[1:]:
