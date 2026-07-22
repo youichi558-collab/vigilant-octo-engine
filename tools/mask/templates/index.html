@@ -80,10 +80,6 @@
   }
 
   .field-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    gap: 8px;
     margin-bottom: 8px;
   }
   .field-wrap { position: relative; }
@@ -335,7 +331,6 @@
             oninput="onValueInput(this)"
           >
         </div>
-        <span class="arrow-label">→ <span class="mask-badge">{{ rule.label }}</span></span>
       </div>
       {% endfor %}
     </div>
