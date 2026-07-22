@@ -371,6 +371,17 @@
       <span id="selectedFileName"></span>
     </div>
 
+    <!-- 画像選択パネル（PDFのみ表示） -->
+    <div id="imagePanel" style="display:none;">
+      <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
+        <span style="display:inline-block;width:3px;height:14px;background:#e63946;border-radius:2px;"></span>
+        ロゴ・画像の黒塗り選択
+        <span style="font-size:11px; font-weight:400; color:#888;">クリックで選択</span>
+      </div>
+      <div id="imageGrid" style="display:flex; flex-wrap:wrap; gap:8px; padding:4px 0 8px;"></div>
+      <div id="imageLoading" style="font-size:12px; color:#888; padding:8px 0;">画像を読み込み中…</div>
+    </div>
+
     <button type="submit" class="btn-process" id="btnProcess" disabled>
       <span>🔒</span> マスク実行
     </button>
@@ -409,11 +420,15 @@ function onValueInput(el) {
   el.classList.toggle('has-value', el.value.trim().length > 0);
 }
 
-function onFileSelect(input) {
+async function onFileSelect(input) {
   const file = input.files[0];
   const sf = document.getElementById('selectedFile');
   const sfn = document.getElementById('selectedFileName');
   const btn = document.getElementById('btnProcess');
+  const imagePanel = document.getElementById('imagePanel');
+  const imageGrid = document.getElementById('imageGrid');
+  const imageLoading = document.getElementById('imageLoading');
+
   if (file) {
     sfn.textContent = file.name + '  (' + formatSize(file.size) + ')';
     sf.classList.add('visible');
@@ -421,8 +436,66 @@ function onFileSelect(input) {
   } else {
     sf.classList.remove('visible');
     btn.disabled = true;
+    imagePanel.style.display = 'none';
   }
   resetResult();
+
+  // PDFのみ画像抽出
+  if (file && file.name.toLowerCase().endsWith('.pdf')) {
+    imagePanel.style.display = 'block';
+    imageGrid.innerHTML = '';
+    imageLoading.style.display = 'block';
+
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/extract_images', { method: 'POST', body: fd });
+      const data = await res.json();
+      imageLoading.style.display = 'none';
+
+      if (!data.images || data.images.length === 0) {
+        imageGrid.innerHTML = '<span style="font-size:12px;color:#888;">画像なし</span>';
+        return;
+      }
+
+      data.images.forEach(img => {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'position:relative;cursor:pointer;border:2px solid #d0d0d8;border-radius:6px;padding:3px;background:#fff;transition:all .15s;';
+        wrap.dataset.xref = img.xref;
+
+        const thumb = document.createElement('img');
+        thumb.src = img.thumbnail;
+        thumb.style.cssText = 'display:block;max-width:100px;max-height:100px;border-radius:3px;';
+        thumb.title = `${img.width}×${img.height}px`;
+
+        const badge = document.createElement('div');
+        badge.style.cssText = 'display:none;position:absolute;top:2px;right:2px;background:#e63946;color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;font-weight:700;text-align:center;line-height:18px;';
+        badge.textContent = '✓';
+
+        wrap.appendChild(thumb);
+        wrap.appendChild(badge);
+        imageGrid.appendChild(wrap);
+
+        wrap.addEventListener('click', () => {
+          const selected = wrap.dataset.selected === '1';
+          if (selected) {
+            wrap.dataset.selected = '0';
+            wrap.style.borderColor = '#d0d0d8';
+            badge.style.display = 'none';
+          } else {
+            wrap.dataset.selected = '1';
+            wrap.style.borderColor = '#e63946';
+            badge.style.display = 'block';
+          }
+        });
+      });
+    } catch (e) {
+      imageLoading.style.display = 'none';
+      imageGrid.innerHTML = '<span style="font-size:12px;color:#c0392b;">画像読み込みエラー</span>';
+    }
+  } else {
+    imagePanel.style.display = 'none';
+  }
 }
 
 function formatSize(bytes) {
@@ -461,6 +534,10 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
 
   try {
     const formData = new FormData(this);
+    // 選択された画像xrefを追加
+    document.querySelectorAll('#imageGrid [data-selected="1"]').forEach(el => {
+      formData.append('img_xref', el.dataset.xref);
+    });
     const response = await fetch('/process', { method: 'POST', body: formData });
 
     if (!response.ok) {

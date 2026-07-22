@@ -85,7 +85,49 @@ def mask_text_file(input_path: Path, output_path: Path, rules: list[MaskRule]) -
 
 # ---------- PDF ----------
 
-def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
+def extract_pdf_images(pdf_bytes: bytes) -> list[dict]:
+    """PDF内の画像を抽出してbase64サムネイル付きで返す"""
+    try:
+        import fitz
+    except ImportError:
+        return []
+    try:
+        from PIL import Image as PilImage
+        import io, base64
+    except ImportError:
+        return []
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    seen: set[int] = set()
+    result = []
+
+    for page in doc:
+        for img in page.get_images():
+            xref = img[0]
+            if xref in seen:
+                continue
+            seen.add(xref)
+            try:
+                img_data = doc.extract_image(xref)
+                pil = PilImage.open(io.BytesIO(img_data["image"]))
+                pil.thumbnail((120, 120))
+                buf = io.BytesIO()
+                pil.save(buf, format="PNG")
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                result.append({
+                    "xref": xref,
+                    "width": img_data["width"],
+                    "height": img_data["height"],
+                    "thumbnail": f"data:image/png;base64,{b64}",
+                })
+            except Exception:
+                pass
+
+    doc.close()
+    return result
+
+
+def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None) -> int:
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -93,20 +135,30 @@ def mask_pdf(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
 
     doc = fitz.open(str(input_path))
     total = 0
+    xref_set = set(image_xrefs or [])
 
     for page in doc:
+        # テキスト黒塗り
         page_text = page.get_text()
         matched_strings: set[str] = set()
-
         for rule in rules:
             for m in rule.pattern.finditer(page_text):
                 matched_strings.add(m.group())
-
         for s in matched_strings:
-            instances = page.search_for(s)
-            for rect in instances:
+            for rect in page.search_for(s):
                 page.add_redact_annot(rect, fill=(0, 0, 0))
                 total += 1
+
+        # 画像黒塗り
+        for img in page.get_images():
+            xref = img[0]
+            if xref in xref_set:
+                try:
+                    bbox = page.get_image_bbox(img)
+                    page.add_redact_annot(bbox, fill=(0, 0, 0))
+                    total += 1
+                except Exception:
+                    pass
 
         page.apply_redactions()
 
@@ -180,10 +232,10 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
 
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".log", ".ini", ".json", ".xml", ".html", ".htm"}
 
-def process_file(input_path: Path, output_path: Path, rules: list[MaskRule]):
+def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None):
     suffix = input_path.suffix.lower()
     if suffix == ".pdf":
-        count = mask_pdf(input_path, output_path, rules)
+        count = mask_pdf(input_path, output_path, rules, image_xrefs)
         print(f"  [PDF ]  {count:4d}箇所 黒塗り  → {output_path.name}")
     elif suffix == ".docx":
         count = mask_docx(input_path, output_path, rules)
