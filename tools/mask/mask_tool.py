@@ -239,6 +239,61 @@ def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 10, scale: float = 1.5, 
     return pages
 
 
+def _redact_text_occurrences(page, targets: list[str]) -> int:
+    """ページ内の全文字を空白無視で連結し、対象文字列に一致する文字のbboxを黒塗りする。
+
+    テキストが複数のオブジェクトに分割されていたり(例: '5'+'ABC-123'+'C')、
+    スペースの入り方が場所によって違っても、文字列全体をカバーできる。
+    """
+    import fitz
+
+    def norm(s: str) -> str:
+        return "".join(s.split())
+
+    target_norms = [norm(t) for t in targets if norm(t)]
+    if not target_norms:
+        return 0
+
+    # sort=True で視覚的な並び順(上→下、左→右)に文字を取得する
+    chars: list[tuple[str, "fitz.Rect"]] = []
+    for block in page.get_text("rawdict", sort=True).get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                for ch in span.get("chars", []):
+                    c = ch.get("c", "")
+                    if not c or c.isspace():
+                        continue
+                    chars.append((c, fitz.Rect(ch["bbox"])))
+
+    stream = "".join(c for c, _ in chars)
+    count = 0
+
+    for tn in target_norms:
+        start = 0
+        while True:
+            idx = stream.find(tn, start)
+            if idx < 0:
+                break
+            rects = [chars[i][1] for i in range(idx, idx + len(tn))]
+            # 同じ行にある文字のbboxは1つの矩形にまとめ、行が変わったら分ける
+            cur = fitz.Rect(rects[0])
+            for r in rects[1:]:
+                same_row = abs((r.y0 + r.y1) - (cur.y0 + cur.y1)) / 2 < max(r.height, cur.height) * 0.7
+                if same_row:
+                    cur |= r
+                else:
+                    page.add_redact_annot(cur + (-1, -1, 1, 1), fill=(0, 0, 0))
+                    count += 1
+                    cur = fitz.Rect(r)
+            page.add_redact_annot(cur + (-1, -1, 1, 1), fill=(0, 0, 0))
+            count += 1
+            start = idx + 1
+
+    return count
+
+
 def mask_pdf(
     input_path: Path,
     output_path: Path,
@@ -293,17 +348,11 @@ def mask_pdf(
             page.add_redact_annot(rect, fill=(0, 0, 0))
             total += 1
 
-        # テキスト候補: 全ページを行単位で走査し、同じ文字列を含む行を黒塗り
-        # （search_forはエンコーディング差で失敗するため、抽出と同じdict方式で照合する）
+        # テキスト候補: 文字単位で照合して黒塗り
+        # （番号が複数のテキストオブジェクトに分割されている場合や
+        #   スペース有無の違いがあっても、文字列全体をカバーする）
         if line_texts:
-            for block in page.get_text("dict").get("blocks", []):
-                if block.get("type") != 0:
-                    continue
-                for line in block.get("lines", []):
-                    text = "".join(sp["text"] for sp in line.get("spans", [])).strip()
-                    if text and any(t in text for t in line_texts):
-                        page.add_redact_annot(fitz.Rect(line["bbox"]), fill=(0, 0, 0))
-                        total += 1
+            total += _redact_text_occurrences(page, line_texts)
 
         # 画像・ベクターグラフィックにも黒塗りを適用
         try:
