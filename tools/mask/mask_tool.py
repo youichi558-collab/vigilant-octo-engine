@@ -253,6 +253,9 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
     - テキストが複数のオブジェクトに分割されていても(例: '5'+'ABC-123'+'C')全体をカバー
     - 全角/半角・ハイフン字種の違いを正規化して照合
     - 一致部分の前後にスペースなしで密着している文字(枝番・改訂記号など)も塗り広げる
+    - 一致文字がその行の過半を占める場合は行全体を黒塗り
+      (図面欄のように1文字ずつ間隔をあけて配置され、シート番号・改訂記号が
+       スペースを挟んで同じ欄に入っているケースをカバーする)
     """
     import fitz
 
@@ -265,32 +268,45 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
 
     # sort=True で視覚的な並び順(上→下、左→右)に文字を取得する
     # スペースは「区切りマーカー」として保持する(塗り広げの停止条件に使う)
-    items: list[tuple[str, "fitz.Rect | None"]] = []  # (char, rect) スペースはrect=None
+    items: list[tuple[str, "fitz.Rect | None", int]] = []  # (char, rect, line_id)
+    line_bboxes: list["fitz.Rect"] = []
+    line_char_counts: list[int] = []  # 行ごとの非スペース文字数
     for block in page.get_text("rawdict", sort=True).get("blocks", []):
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
+            line_id = len(line_bboxes)
+            line_bboxes.append(fitz.Rect(line["bbox"]))
+            n_chars = 0
             for span in line.get("spans", []):
                 for ch in span.get("chars", []):
                     c = ch.get("c", "")
                     if not c:
                         continue
                     if c.isspace():
-                        items.append((" ", None))
+                        items.append((" ", None, line_id))
                     else:
-                        items.append((c, fitz.Rect(ch["bbox"])))
-            items.append((" ", None))  # 行末も区切り扱い
+                        items.append((c, fitz.Rect(ch["bbox"]), line_id))
+                        n_chars += 1
+            line_char_counts.append(n_chars)
+            items.append((" ", None, line_id))  # 行末も区切り扱い
 
     # 正規化ストリームと、各位置→itemsインデックスの対応表を作る
     stream_chars: list[str] = []
     stream_map: list[int] = []
-    for i, (c, rect) in enumerate(items):
+    for i, (c, rect, _) in enumerate(items):
         if rect is None:
             continue
         for nc in _norm_char(c):
             stream_chars.append(nc)
             stream_map.append(i)
     stream = "".join(stream_chars)
+
+    def _adjacent(a, b):  # aがbの左隣か
+        h = max(a.height, b.height)
+        same_row = abs((a.y0 + a.y1) - (b.y0 + b.y1)) / 2 < h * 0.7
+        gap = b.x0 - a.x1
+        return same_row and -h * 0.5 < gap < h * 0.35
 
     count = 0
     for tn in target_norms:
@@ -304,30 +320,64 @@ def _redact_text_occurrences(page, targets: list[str]) -> int:
 
             # 前後に密着している文字まで塗り広げる
             # (スペースで停止。テキストオブジェクトの境界は幾何的な隣接判定で越える)
-            def _adjacent(a, b):  # aがbの左隣か
-                h = max(a.height, b.height)
-                same_row = abs((a.y0 + a.y1) - (b.y0 + b.y1)) / 2 < h * 0.7
-                gap = b.x0 - a.x1
-                return same_row and -h * 0.5 < gap < h * 0.35
-
             while lo - 1 >= 0 and items[lo - 1][1] is not None and _adjacent(items[lo - 1][1], items[lo][1]):
                 lo -= 1
             while hi + 1 < len(items) and items[hi + 1][1] is not None and _adjacent(items[hi][1], items[hi + 1][1]):
                 hi += 1
 
-            rects = [items[i][1] for i in range(lo, hi + 1) if items[i][1] is not None]
-            # 同じ行にある文字のbboxは1つの矩形にまとめ、行が変わったら分ける
-            cur = fitz.Rect(rects[0])
-            for r in rects[1:]:
-                same_row = abs((r.y0 + r.y1) - (cur.y0 + cur.y1)) / 2 < max(r.height, cur.height) * 0.7
-                if same_row:
-                    cur |= r
+            # 行ごとの一致文字数を数える
+            matched_per_line: dict[int, int] = {}
+            for i in range(lo, hi + 1):
+                if items[i][1] is not None:
+                    matched_per_line[items[i][2]] = matched_per_line.get(items[i][2], 0) + 1
+
+            covered_lines: set[int] = set()
+            char_rects: list["fitz.Rect"] = []
+            for line_id, n_matched in matched_per_line.items():
+                if line_char_counts[line_id] > 0 and n_matched / line_char_counts[line_id] >= 0.5:
+                    # 行の過半が一致 → 行全体(欄全体)を黒塗り
+                    covered_lines.add(line_id)
                 else:
-                    page.add_redact_annot(cur + (-1, -1, 1, 1), fill=(0, 0, 0))
-                    count += 1
-                    cur = fitz.Rect(r)
-            page.add_redact_annot(cur + (-1, -1, 1, 1), fill=(0, 0, 0))
-            count += 1
+                    # 文中の一部 → 一致した文字だけ黒塗り
+                    char_rects.extend(items[i][1] for i in range(lo, hi + 1)
+                                      if items[i][1] is not None and items[i][2] == line_id)
+
+            # 同じ段にスペースを挟んで並ぶ短い断片行(シート番号・改訂記号など)まで塗り広げる
+            # 長いラベル行(Drawing No.等)は文字数条件で除外される
+            if covered_lines:
+                changed = True
+                while changed:
+                    changed = False
+                    for lid, lb in enumerate(line_bboxes):
+                        if lid in covered_lines or line_char_counts[lid] == 0 or line_char_counts[lid] > 3:
+                            continue
+                        for cid in covered_lines:
+                            cb = line_bboxes[cid]
+                            h = max(lb.height, cb.height)
+                            same_row = min(lb.y1, cb.y1) - max(lb.y0, cb.y0) > h * 0.5
+                            gap = max(lb.x0, cb.x0) - min(lb.x1, cb.x1)
+                            if same_row and gap < h * 2.0:
+                                covered_lines.add(lid)
+                                changed = True
+                                break
+
+            for line_id in covered_lines:
+                page.add_redact_annot(line_bboxes[line_id] + (-1, -1, 1, 1), fill=(0, 0, 0))
+                count += 1
+
+            if char_rects:
+                cur = fitz.Rect(char_rects[0])
+                for r in char_rects[1:]:
+                    same_row = abs((r.y0 + r.y1) - (cur.y0 + cur.y1)) / 2 < max(r.height, cur.height) * 0.7
+                    if same_row:
+                        cur |= r
+                    else:
+                        page.add_redact_annot(cur + (-1, -1, 1, 1), fill=(0, 0, 0))
+                        count += 1
+                        cur = fitz.Rect(r)
+                page.add_redact_annot(cur + (-1, -1, 1, 1), fill=(0, 0, 0))
+                count += 1
+
             start = idx + 1
 
     return count
