@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from flask import Flask, jsonify, render_template, request, send_file
 
-from mask_tool import MaskRule, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_pdf_candidates
+from mask_tool import MaskRule, audit_pdf, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_pdf_candidates
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -168,7 +168,19 @@ def process():
         return jsonify({"error": f"処理エラー: {e}"}), 500
 
     output_name = Path(file.filename).stem + "_masked" + suffix
-    return send_file(str(tmp_out), as_attachment=True, download_name=output_name)
+    response = send_file(str(tmp_out), as_attachment=True, download_name=output_name)
+
+    # マスク後検査: 対象がまだ残っているページを特定してヘッダーで返す
+    if suffix == ".pdf":
+        try:
+            flagged = audit_pdf(tmp_out, candidate_texts, rules, generalize)
+            audit_json = json.dumps(flagged[:50], ensure_ascii=False)
+            import base64
+            response.headers["X-Mask-Audit"] = base64.b64encode(audit_json.encode()).decode()
+        except Exception:
+            pass
+
+    return response
 
 
 if __name__ == "__main__":

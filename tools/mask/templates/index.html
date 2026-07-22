@@ -379,7 +379,7 @@
 <header>
   <h1>マスクツール</h1>
   <span class="badge">社外秘情報の隠蔽</span>
-  <span style="font-size:11px;color:#aaa;margin-left:auto;">v11 (2026-07-22)</span>
+  <span style="font-size:11px;color:#aaa;margin-left:auto;">v12 (2026-07-22)</span>
 </header>
 
 <form id="mainForm" method="POST" action="/process" enctype="multipart/form-data">
@@ -509,6 +509,13 @@
         </div>
       </div>
       <a id="downloadLink" class="btn-download">⬇ マスク済みファイルをダウンロード</a>
+      <div id="auditBox" style="display:none; margin-top:10px; padding:10px 12px; background:#fff8ec; border:1px solid #f0c780; border-radius:8px; font-size:12px; color:#8a5a00;">
+        <b>⚠ 残存の可能性があるページ</b>（ページ番号を指定してプレビューで確認してください）
+        <div id="auditList" style="margin-top:6px; line-height:1.8;"></div>
+      </div>
+      <div id="auditOkBox" style="display:none; margin-top:10px; padding:8px 12px; background:#f0fff4; border:1px solid #9fd9ae; border-radius:8px; font-size:12px; color:#1d7a3a;">
+        ✅ 全ページ検査: チェックした文字列・形式・パターンの残存は検出されませんでした
+      </div>
     </div>
 
     <div class="tips">
@@ -908,6 +915,28 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
 
     document.getElementById('resultSub').textContent = 'ファイル: ' + filename;
     document.getElementById('resultBox').classList.add('visible');
+
+    // マスク後検査の結果表示
+    const auditBox = document.getElementById('auditBox');
+    const auditOkBox = document.getElementById('auditOkBox');
+    auditBox.style.display = 'none';
+    auditOkBox.style.display = 'none';
+    const auditHeader = response.headers.get('X-Mask-Audit');
+    if (auditHeader) {
+      try {
+        const flagged = JSON.parse(new TextDecoder().decode(
+          Uint8Array.from(atob(auditHeader), c => c.charCodeAt(0))));
+        if (flagged.length > 0) {
+          const list = document.getElementById('auditList');
+          list.innerHTML = flagged.map(f =>
+            `<div>p.${f.page}: ${f.hits.map(h => h.replace(/</g,'&lt;')).join(' / ')}</div>`
+          ).join('');
+          auditBox.style.display = 'block';
+        } else {
+          auditOkBox.style.display = 'block';
+        }
+      } catch (e) { /* 検査結果の解析失敗は無視 */ }
+    }
 
   } catch (err) {
     showError('通信エラー: ' + err.message);

@@ -263,6 +263,55 @@ def _generalize_pattern(tn: str) -> str:
     return "".join(parts)
 
 
+def audit_pdf(pdf_path: Path, literal_texts: list[str] | None = None,
+              regex_rules: list[MaskRule] | None = None,
+              generalize: bool = False) -> list[dict]:
+    """マスク済みPDFを再スキャンし、対象文字列・形式・パターンが残っているページを返す。
+
+    数百ページのPDFでも、目視確認が必要なページだけを特定できる。
+    戻り値: [{"page": ページ番号(1始まり), "hits": [検出内容, ...]}, ...]
+    """
+    try:
+        import fitz
+    except ImportError:
+        return []
+
+    def norm_str(s: str) -> str:
+        return "".join(_norm_char(c) for c in s if not c.isspace())
+
+    literals = [norm_str(t) for t in (literal_texts or []) if norm_str(t)]
+    gen_pats = []
+    if generalize:
+        for tn in literals:
+            if len(tn) >= 6:
+                try:
+                    gen_pats.append(re.compile(_generalize_pattern(tn)))
+                except re.error:
+                    pass
+
+    doc = fitz.open(str(pdf_path))
+    flagged = []
+    for i, page in enumerate(doc):
+        raw_text = page.get_text()
+        stream = norm_str(raw_text)
+        hits = []
+        for lit in literals:
+            if lit in stream:
+                hits.append(f"文字列: {lit[:20]}")
+        for pat in gen_pats:
+            m = pat.search(stream)
+            if m:
+                hits.append(f"形式一致: {m.group()[:20]}")
+        for rule in (regex_rules or []):
+            m = rule.pattern.search(raw_text)
+            if m:
+                hits.append(f"{rule.label}: {m.group()[:20]}")
+        if hits:
+            flagged.append({"page": i + 1, "hits": sorted(set(hits))})
+    doc.close()
+    return flagged
+
+
 def _redact_text_occurrences(page, targets: list[str], generalize: bool = False) -> int:
     """ページ内の全文字を空白無視で連結し、対象文字列に一致する箇所を黒塗りする。
 
