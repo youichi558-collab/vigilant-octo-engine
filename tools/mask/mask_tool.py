@@ -838,29 +838,57 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
 
 # ---------- XLSX ----------
 
-def _iter_xlsx_string_cells(wb):
-    """全シートの文字列セルを (シート名, セル位置, 値) で列挙する（数式セルは除く）"""
-    for ws in wb.worksheets:
-        for row in ws.iter_rows():
-            for cell in row:
-                val = cell.value
-                if not isinstance(val, str) or not val.strip():
-                    continue
-                if cell.data_type == "f" or val.startswith("="):
-                    continue  # 数式セルは対象外（書き換えるとシートが壊れるため）
-                yield ws.title, cell.coordinate, val
+def _open_xlsx(source, data_only: bool = False):
+    """XLSXを開く（sourceはパス、またはfile-like。file-likeは複数回開けるようseek(0)する）"""
+    import openpyxl
+    if hasattr(source, "seek"):
+        source.seek(0)
+    return openpyxl.load_workbook(source, data_only=data_only)
+
+
+def _is_formula_cell(cell) -> bool:
+    val = cell.value
+    return cell.data_type == "f" or (isinstance(val, str) and val.startswith("="))
+
+
+def _iter_xlsx_all_texts(source):
+    """全シートの「文字列として扱えるセル値」を (シート名, セル位置, 表示テキスト, 数式か) で列挙する。
+
+    通常の文字列セルに加え、数式セル（例: =B2&" "&C2 で氏名を結合しているセル）についても
+    Excelが保存時に書き込むキャッシュ済み計算結果(data_only=True)を対象にする。数式セルは
+    値を書き換えると数式が壊れるため、検出・監査の対象としては拾うが、実際の値の変更は
+    mask_xlsx側でルールに一致したセルのみ行う（一致しない数式は温存する）。
+    キャッシュが存在しない（一度もExcelで計算・保存されていない）場合は検出できない。
+    """
+    try:
+        wb = _open_xlsx(source, data_only=False)
+        wb_cached = _open_xlsx(source, data_only=True)
+    except ImportError:
+        return
+    try:
+        for ws in wb.worksheets:
+            ws_cached = wb_cached[ws.title] if ws.title in wb_cached.sheetnames else None
+            for row in ws.iter_rows():
+                for cell in row:
+                    if _is_formula_cell(cell):
+                        if ws_cached is None:
+                            continue
+                        cached_val = ws_cached[cell.coordinate].value
+                        if isinstance(cached_val, str) and cached_val.strip():
+                            yield ws.title, cell.coordinate, cached_val, True
+                    else:
+                        val = cell.value
+                        if isinstance(val, str) and val.strip():
+                            yield ws.title, cell.coordinate, val, False
+    finally:
+        wb.close()
+        wb_cached.close()
 
 
 def extract_xlsx_text(source) -> str:
-    """XLSXの全シートの文字列セル（数式を除く）を改行区切りで抽出する（sourceはパスまたはfile-like）"""
-    try:
-        import openpyxl
-    except ImportError:
-        return ""
-    wb = openpyxl.load_workbook(source, data_only=False)
-    text = "\n".join(val for _, _, val in _iter_xlsx_string_cells(wb))
-    wb.close()
-    return text
+    """XLSXの全シートの文字列（数式セルはキャッシュ済み計算結果を含む）を改行区切りで抽出する
+    （sourceはパスまたはfile-like）"""
+    return "\n".join(val for _, _, val, _ in _iter_xlsx_all_texts(source))
 
 
 def scan_xlsx_candidates(source, extra_patterns: list[dict] | None = None) -> list[dict]:
@@ -876,23 +904,38 @@ def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
 
     shutil.copy2(input_path, output_path)
     wb = openpyxl.load_workbook(str(output_path), data_only=False)
+    wb_cached = openpyxl.load_workbook(str(output_path), data_only=True)
     total = 0
 
     for ws in wb.worksheets:
+        ws_cached = wb_cached[ws.title] if ws.title in wb_cached.sheetnames else None
         for row in ws.iter_rows():
             for cell in row:
-                val = cell.value
-                if not isinstance(val, str) or not val:
-                    continue
-                if cell.data_type == "f" or val.startswith("="):
-                    continue  # 数式セルは対象外（書き換えるとシートが壊れるため）
-                new_val, n = apply_rules(val, rules)
-                if n:
-                    cell.value = new_val
-                    total += n
+                if _is_formula_cell(cell):
+                    # 数式セル: キャッシュ済み計算結果がルールに一致する場合のみ、
+                    # マスク後の文字列で数式ごと置き換える（機密情報を数式経由で
+                    # 再現させないことを、数式を保つことより優先する）
+                    if ws_cached is None:
+                        continue
+                    cached_val = ws_cached[cell.coordinate].value
+                    if not isinstance(cached_val, str) or not cached_val:
+                        continue
+                    new_val, n = apply_rules(cached_val, rules)
+                    if n:
+                        cell.value = new_val
+                        total += n
+                else:
+                    val = cell.value
+                    if not isinstance(val, str) or not val:
+                        continue
+                    new_val, n = apply_rules(val, rules)
+                    if n:
+                        cell.value = new_val
+                        total += n
 
     wb.save(str(output_path))
     wb.close()
+    wb_cached.close()
     return total
 
 
@@ -901,18 +944,12 @@ def audit_xlsx(source, literal_texts: list[str] | None = None,
                generalize: bool = False) -> list[dict]:
     """マスク済みXLSXを再スキャンし、対象文字列・形式・パターンが残っているセルを返す。
 
-    戻り値: [{"location": "シート名!セル位置", "hits": [検出内容, ...]}, ...]
+    戻り値: [{"location": "シート名!セル位置" (数式セルは末尾に(数式)), "hits": [検出内容, ...]}, ...]
     """
-    try:
-        import openpyxl
-    except ImportError:
-        return []
-
     literals, gen_pats = _build_audit_matchers(literal_texts, generalize)
 
-    wb = openpyxl.load_workbook(source, data_only=False)
     flagged = []
-    for sheet_name, coord, raw_val in _iter_xlsx_string_cells(wb):
+    for sheet_name, coord, raw_val, is_formula in _iter_xlsx_all_texts(source):
         stream = _norm_str(raw_val)
         hits = []
         for lit in literals:
@@ -927,8 +964,8 @@ def audit_xlsx(source, literal_texts: list[str] | None = None,
             if m:
                 hits.append(f"{rule.label}: {m.group()[:20]}")
         if hits:
-            flagged.append({"location": f"{sheet_name}!{coord}", "hits": sorted(set(hits))})
-    wb.close()
+            loc = f"{sheet_name}!{coord}" + ("(数式)" if is_formula else "")
+            flagged.append({"location": loc, "hits": sorted(set(hits))})
     return flagged
 
 
