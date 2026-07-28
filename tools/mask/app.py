@@ -136,6 +136,8 @@ def process():
             continue
         raw_label = str(item.get("label") or "検出候補").strip()
         base_label = raw_label.split("(")[0].split("（")[0].strip() or "検出候補"
+        # 検出方式の呼び名がそのまま置換文字列になると不自然なため、意味の通る表記に寄せる
+        base_label = {"姓のみ": "個人名"}.get(base_label, base_label)
         auto_scan_vals.append(val)
         rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label=f"《{base_label}》"))
 
