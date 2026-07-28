@@ -443,6 +443,17 @@
       <span id="selectedFileName"></span>
     </div>
 
+    <!-- 自動検出候補パネル（全形式共通: PDF/DOCX/XLSX/TXT等） -->
+    <div id="autoScanPanel" style="display:none; margin-bottom:12px;">
+      <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
+        <span style="display:inline-block;width:3px;height:14px;background:#e63946;border-radius:2px;"></span>
+        自動検出した候補
+        <span style="font-size:11px; font-weight:400; color:#888;">チェックしたものをマスク対象に追加</span>
+      </div>
+      <div id="autoScanLoading" style="font-size:12px; color:#888; padding:4px 0;">候補を検出中…</div>
+      <div id="autoScanList" style="max-height:200px; overflow-y:auto;"></div>
+    </div>
+
     <!-- 候補検出パネル（PDFのみ表示） -->
     <div id="candidatePanel" style="display:none; margin-bottom:12px;">
       <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
@@ -764,6 +775,52 @@ function onFileSelect(input) {
   refreshRegionTags();
 
   const isPdf = file && file.name.toLowerCase().endsWith('.pdf');
+
+  // 自動検出候補パネル（全形式共通）
+  const autoScanPanel  = document.getElementById('autoScanPanel');
+  const autoScanList   = document.getElementById('autoScanList');
+  const autoScanLoading = document.getElementById('autoScanLoading');
+  autoScanList.innerHTML = '';
+  if (file) {
+    autoScanPanel.style.display = 'block';
+    autoScanLoading.style.display = 'block';
+    (async () => {
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch('/scan_candidates', { method: 'POST', body: fd });
+        const data = await res.json();
+        autoScanLoading.style.display = 'none';
+        if (!data.candidates || data.candidates.length === 0) {
+          autoScanList.innerHTML = '<span style="font-size:12px;color:#888;">検出候補なし</span>';
+          return;
+        }
+        data.candidates.forEach(c => {
+          const item = document.createElement('div');
+          item.className = 'candidate-item';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.name = 'candidate_val';
+          cb.value = c.value;
+          const val = document.createElement('span');
+          val.className = 'candidate-val';
+          val.textContent = c.value;
+          const tag = document.createElement('span');
+          tag.className = 'candidate-tag';
+          tag.textContent = c.label;
+          item.appendChild(cb);
+          item.appendChild(val);
+          item.appendChild(tag);
+          autoScanList.appendChild(item);
+        });
+      } catch (e) {
+        autoScanLoading.style.display = 'none';
+        autoScanList.innerHTML = '<span style="font-size:12px;color:#c0392b;">検出エラー</span>';
+      }
+    })();
+  } else {
+    autoScanPanel.style.display = 'none';
+  }
 
   // 候補検出パネル
   const candidatePanel = document.getElementById('candidatePanel');
