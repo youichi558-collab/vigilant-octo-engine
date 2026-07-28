@@ -17,6 +17,8 @@
 # value : CLI利用時にマスクする文字列。画面から使う場合は入力欄に直接入力するため
 #         ここの値は使われない（入力欄の説明は全欄共通）。
 # label : マスク後に置き換わる文字列。
+#         value項目は種別を分けず全て《マスク》で統一している
+#         （入力欄も全欄共通のため、欄ごとに置換表記を変える意味がない）。
 
 masks:
 
@@ -26,19 +28,19 @@ masks:
 
   - key: customer_full
     value: "客先名(正式)"
-    label: "《客先名》"
+    label: "《マスク》"
 
   - key: customer_short
     value: "客先名(略称)"
-    label: "《客先名》"
+    label: "《マスク》"
 
   - key: customer_abbrev
     value: "客先名(別表記)"
-    label: "《客先名》"
+    label: "《マスク》"
 
   - key: customer_address
     value: "客先住所"
-    label: "《客先住所》"
+    label: "《マスク》"
 
   # ================================================================
   # 【2】案件・設備情報
@@ -46,27 +48,27 @@ masks:
 
   - key: project_name
     value: "装置名・案件名"
-    label: "《案件名》"
+    label: "《マスク》"
 
   - key: equipment_no
     value: "設備番号・ライン名"
-    label: "《設備番号》"
+    label: "《マスク》"
 
   - key: machine_no
     value: "機械番号"
-    label: "《機械番号》"
+    label: "《マスク》"
 
   - key: drawing_no
     value: "図面番号"
-    label: "《図面番号》"
+    label: "《マスク》"
 
   - key: order_no
     value: "発注番号"
-    label: "《発注番号》"
+    label: "《マスク》"
 
   - key: serial_no
     value: "製造番号・シリアル"
-    label: "《製造番号》"
+    label: "《マスク》"
 
   # ================================================================
   # 【3】担当者名
@@ -76,23 +78,23 @@ masks:
 
   - key: customer_person1
     value: "客先担当者1"
-    label: "《担当者名》"
+    label: "《マスク》"
 
   - key: customer_person2
     value: "客先担当者2"
-    label: "《担当者名》"
+    label: "《マスク》"
 
   - key: customer_person3
     value: "客先担当者3"
-    label: "《担当者名》"
+    label: "《マスク》"
 
   - key: own_person1
     value: "自社担当者1"
-    label: "《担当者名》"
+    label: "《マスク》"
 
   - key: own_person2
     value: "自社担当者2"
-    label: "《担当者名》"
+    label: "《マスク》"
 
   # ================================================================
   # 【4】自社・取引先
@@ -100,15 +102,15 @@ masks:
 
   - key: own_company
     value: "自社名"
-    label: "《自社名》"
+    label: "《マスク》"
 
   - key: vendor1
     value: "仕入先・協力会社1"
-    label: "《取引先名》"
+    label: "《マスク》"
 
   - key: vendor2
     value: "仕入先・協力会社2"
-    label: "《取引先名》"
+    label: "《マスク》"
 
   # ================================================================
   # 【5】正規表現パターン（自動検出）
