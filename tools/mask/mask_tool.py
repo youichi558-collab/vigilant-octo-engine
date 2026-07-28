@@ -956,6 +956,24 @@ def _is_formula_cell(cell) -> bool:
     return cell.data_type == "f" or (isinstance(val, str) and val.startswith("="))
 
 
+# 印刷ヘッダー/フッターは「奇数/偶数/先頭ページ」×「左/中央/右」で保持される
+_HF_GROUPS = ("oddHeader", "oddFooter", "evenHeader", "evenFooter", "firstHeader", "firstFooter")
+_HF_PARTS = ("left", "center", "right")
+
+
+def _iter_xlsx_header_footer(ws):
+    """シートの印刷ヘッダー/フッターの文字列を (場所の説明, 文字列) で列挙する"""
+    for group_name in _HF_GROUPS:
+        group = getattr(ws, group_name, None)
+        if group is None:
+            continue
+        for part_name in _HF_PARTS:
+            part = getattr(group, part_name, None)
+            text = getattr(part, "text", None)
+            if isinstance(text, str) and text.strip():
+                yield f"{group_name}.{part_name}", text
+
+
 def _iter_xlsx_all_texts(source):
     """全シートの「文字列として扱えるセル値」を (シート名, セル位置, 表示テキスト, 数式か) で列挙する。
 
@@ -985,6 +1003,14 @@ def _iter_xlsx_all_texts(source):
                         val = cell.value
                         if isinstance(val, str) and val.strip():
                             yield ws.title, cell.coordinate, val, False
+                    # セルのメモ（コメント）。セル値とは別に保持されるため
+                    # セルだけ見ていると氏名が残る。
+                    comment = getattr(cell, "comment", None)
+                    if comment is not None and isinstance(comment.text, str) and comment.text.strip():
+                        yield ws.title, f"{cell.coordinate}(メモ)", comment.text, False
+            # 印刷時のヘッダー/フッター。画面上のセルには現れないが文字列として保存される。
+            for where, text in _iter_xlsx_header_footer(ws):
+                yield ws.title, where, text, False
     finally:
         wb.close()
         wb_cached.close()
@@ -1031,11 +1057,32 @@ def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
                         total += n
                 else:
                     val = cell.value
-                    if not isinstance(val, str) or not val:
-                        continue
-                    new_val, n = apply_rules(val, rules)
+                    if isinstance(val, str) and val:
+                        new_val, n = apply_rules(val, rules)
+                        if n:
+                            cell.value = new_val
+                            total += n
+
+                # セルのメモ（コメント）はセル値とは別に保存されるため個別に処理する
+                comment = getattr(cell, "comment", None)
+                if comment is not None and isinstance(comment.text, str) and comment.text:
+                    new_text, n = apply_rules(comment.text, rules)
                     if n:
-                        cell.value = new_val
+                        comment.text = new_text
+                        total += n
+
+        # 印刷ヘッダー/フッター（画面のセルには出ないが文字列として保存される）
+        for group_name in _HF_GROUPS:
+            group = getattr(ws, group_name, None)
+            if group is None:
+                continue
+            for part_name in _HF_PARTS:
+                part = getattr(group, part_name, None)
+                text = getattr(part, "text", None)
+                if isinstance(text, str) and text:
+                    new_text, n = apply_rules(text, rules)
+                    if n:
+                        part.text = new_text
                         total += n
 
     wb.save(str(output_path))
