@@ -1125,6 +1125,254 @@ def _is_formula_cell(cell) -> bool:
     return cell.data_type == "f" or (isinstance(val, str) and val.startswith("="))
 
 
+# ---- 図形・テキストボックス（xl/drawings/） ----
+# openpyxl は図形を読み書きできず、保存時に黙って削除してしまう。そのため
+# 「マスクすると図面注記や吹き出しが消えたファイルが出来上がる」状態だった。
+# ZIPを直接扱い、原本の図形パートをマスクした上で出力に戻す。
+
+# DrawingML の文字列要素。図形・グラフのタイトル等の文字はすべてここに入る。
+_DRAWINGML_TEXT = re.compile(r"(<a:t(?:\s[^>]*)?>)([^<]*)(</a:t>)")
+
+_RELS_DRAWING_TYPE = "/relationships/drawing"
+
+
+def _rels_path_of(part: str) -> str:
+    """パートに対応する関係定義(.rels)のパスを返す"""
+    directory, name = part.rsplit("/", 1)
+    return f"{directory}/_rels/{name}.rels"
+
+
+def _resolve_part(base_part: str, target: str) -> str:
+    """関係定義のTargetをZIP内のパスに解決する。
+
+    Targetはパート基準の相対パス("../drawings/drawing1.xml")のこともあれば、
+    パッケージ先頭からの絶対パス("/xl/worksheets/sheet1.xml")のこともある
+    （openpyxlは後者で書く）。両方を扱わないとパスを取り違える。
+    """
+    if target.startswith("/"):
+        return target.lstrip("/")
+    head = base_part.rsplit("/", 1)
+    segments = head[0].split("/") if len(head) > 1 else []
+    for seg in target.split("/"):
+        if seg == "..":
+            if segments:
+                segments.pop()
+        elif seg not in ("", "."):
+            segments.append(seg)
+    return "/".join(segments)
+
+
+def _parse_rels(xml: str) -> dict[str, tuple[str, str]]:
+    """関係定義XMLを {Id: (Type, Target)} で返す（外部リンクは除く）"""
+    rels = {}
+    for tag in re.findall(r"<Relationship\b[^>]*?/?>", xml):
+        rid = re.search(r'\bId="([^"]+)"', tag)
+        target = re.search(r'\bTarget="([^"]+)"', tag)
+        mode = re.search(r'\bTargetMode="([^"]+)"', tag)
+        if rid and target and (not mode or mode.group(1) != "External"):
+            rtype = re.search(r'\bType="([^"]+)"', tag)
+            rels[rid.group(1)] = (rtype.group(1) if rtype else "", target.group(1))
+    return rels
+
+
+def _read_part(z, part: str) -> str | None:
+    try:
+        return z.read(part).decode("utf-8", "replace")
+    except KeyError:
+        return None
+
+
+def _xlsx_sheets(z) -> list[tuple[str, str]]:
+    """ブック内のワークシートを (シート名, ZIP内パス) でシート順に返す"""
+    wb_xml = _read_part(z, "xl/workbook.xml")
+    rels_xml = _read_part(z, "xl/_rels/workbook.xml.rels")
+    if wb_xml is None or rels_xml is None:
+        return []
+    rels = _parse_rels(rels_xml)
+
+    sheets = []
+    for tag in re.findall(r"<sheet\b[^>]*?/?>", wb_xml):
+        rid = re.search(r'\br:id="([^"]+)"', tag)
+        name = re.search(r'\bname="([^"]+)"', tag)
+        if rid and rid.group(1) in rels:
+            path = _resolve_part("xl/workbook.xml", rels[rid.group(1)][1])
+            sheets.append((name.group(1) if name else path, path))
+    return sheets
+
+
+def _sheet_drawing_parts(z, sheet_path: str) -> list[str]:
+    """シートが参照している図形パートのZIP内パスを返す"""
+    sheet_xml = _read_part(z, sheet_path)
+    rels_xml = _read_part(z, _rels_path_of(sheet_path))
+    if sheet_xml is None or rels_xml is None:
+        return []
+    rels = _parse_rels(rels_xml)
+    parts = []
+    for rid in re.findall(r'<drawing\b[^>]*?\br:id="([^"]+)"', sheet_xml):
+        if rid in rels:
+            parts.append(_resolve_part(sheet_path, rels[rid][1]))
+    return parts
+
+
+def _collect_related_parts(z, start_parts: list[str]) -> set[str]:
+    """パートとそれが参照するパート（画像・グラフ等）をたどって集める"""
+    names = set(z.namelist())
+    collected: set[str] = set()
+    queue = list(start_parts)
+    while queue:
+        part = queue.pop()
+        if part in collected or part not in names:
+            continue
+        collected.add(part)
+        rels_path = _rels_path_of(part)
+        rels_xml = _read_part(z, rels_path)
+        if rels_xml is None:
+            continue
+        collected.add(rels_path)
+        for _, target in _parse_rels(rels_xml).values():
+            queue.append(_resolve_part(part, target))
+    return collected
+
+
+def _iter_xlsx_drawing_texts(source):
+    """XLSXの図形・テキストボックス・グラフの文字列を (場所の説明, 文字列) で列挙する"""
+    import zipfile
+    if hasattr(source, "seek"):
+        source.seek(0)
+    try:
+        with zipfile.ZipFile(source) as z:
+            for sheet_name, sheet_path in _xlsx_sheets(z):
+                for part in sorted(_collect_related_parts(z, _sheet_drawing_parts(z, sheet_path))):
+                    if not part.endswith(".xml") or "/_rels/" in part:
+                        continue
+                    xml = _read_part(z, part) or ""
+                    for m in _DRAWINGML_TEXT.finditer(xml):
+                        text = m.group(2).strip()
+                        if text:
+                            yield f"{sheet_name}!図形", text
+    except (zipfile.BadZipFile, OSError, KeyError):
+        return
+
+
+def _restore_xlsx_drawings(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
+    """openpyxl が保存時に削除してしまった図形を、原本からマスクした上で出力に戻す。
+
+    シートの対応付けはシート順で行う（openpyxl はシートの順序を保つが、
+    パート名は付け直すことがあるため、パス名では対応が取れない）。
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(input_path) as zin:
+            src_sheets = _xlsx_sheets(zin)
+            wanted = {i: _sheet_drawing_parts(zin, path)
+                      for i, (_, path) in enumerate(src_sheets)}
+            wanted = {i: parts for i, parts in wanted.items() if parts}
+            if not wanted:
+                return 0
+
+            all_related: set[str] = set()
+            for parts in wanted.values():
+                all_related |= _collect_related_parts(zin, parts)
+            src_data = {p: zin.read(p) for p in all_related}
+            src_content_types = _read_part(zin, "[Content_Types].xml") or ""
+
+        with zipfile.ZipFile(output_path) as zout:
+            out_sheets = _xlsx_sheets(zout)
+            out_parts = {info.filename: zout.read(info.filename) for info in zout.infolist()}
+            order = [info.filename for info in zout.infolist()]
+    except (zipfile.BadZipFile, OSError, KeyError):
+        return 0
+
+    total = 0
+
+    # 図形の文字をマスクする（画像等のバイナリはそのまま戻す）
+    for part, data in src_data.items():
+        if part.endswith(".xml") and "/_rels/" not in part:
+            xml = data.decode("utf-8", "replace")
+
+            def repl(m, _rules=rules):
+                nonlocal total
+                new_text, n = apply_rules(m.group(2), _rules)
+                total += n
+                return f"{m.group(1)}{new_text}{m.group(3)}"
+
+            data = _DRAWINGML_TEXT.sub(repl, xml).encode("utf-8")
+        out_parts[part] = data
+
+    # シートから図形を参照し直す
+    for i, parts in wanted.items():
+        if i >= len(out_sheets):
+            continue
+        sheet_path = out_sheets[i][1]
+        if sheet_path not in out_parts:
+            continue
+        sheet_xml = out_parts[sheet_path].decode("utf-8", "replace")
+        rels_path = _rels_path_of(sheet_path)
+        rels_xml = out_parts.get(rels_path, b"").decode("utf-8", "replace") or (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            "</Relationships>"
+        )
+
+        # openpyxl が独自に書いた図形参照は取り除く（原本の図形で置き換えるため。
+        # 1シートに <drawing> は1つしか置けない）
+        sheet_xml = re.sub(r"<drawing\b[^>]*?/>", "", sheet_xml)
+        rels_xml = re.sub(
+            r'<Relationship\b(?=[^>]*?Type="[^"]*%s")[^>]*?/>' % re.escape(_RELS_DRAWING_TYPE),
+            "", rels_xml)
+
+        used_ids = set(re.findall(r'\bId="([^"]+)"', rels_xml))
+        n = 1
+        while f"rIdDrawing{n}" in used_ids:
+            n += 1
+        new_id = f"rIdDrawing{n}"
+
+        target = "../" + parts[0].split("/", 1)[1] if parts[0].startswith("xl/") else parts[0]
+        rels_xml = rels_xml.replace(
+            "</Relationships>",
+            f'<Relationship Id="{new_id}" Type="http://schemas.openxmlformats.org'
+            f'{_RELS_DRAWING_TYPE}" Target="{target}"/></Relationships>')
+
+        if "xmlns:r=" not in sheet_xml:
+            sheet_xml = sheet_xml.replace(
+                "<worksheet ",
+                '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument'
+                '/2006/relationships" ', 1)
+        # <drawing> は </worksheet> の直前（スキーマ上ほぼ最後）に置く
+        sheet_xml = sheet_xml.replace("</worksheet>", f'<drawing r:id="{new_id}"/></worksheet>')
+
+        out_parts[sheet_path] = sheet_xml.encode("utf-8")
+        out_parts[rels_path] = rels_xml.encode("utf-8")
+
+    # 戻したパートの種類を宣言する（宣言が無いとExcelが破損として扱う）
+    ct = out_parts.get("[Content_Types].xml", b"").decode("utf-8", "replace")
+    if ct:
+        for part in sorted(src_data):
+            if "/_rels/" in part:
+                continue
+            if f'PartName="/{part}"' in ct:
+                continue
+            m = re.search(r'<Override\b[^>]*?PartName="/%s"[^>]*?/>' % re.escape(part),
+                          src_content_types)
+            if m:
+                ct = ct.replace("</Types>", m.group(0) + "</Types>")
+                continue
+            ext = part.rsplit(".", 1)[-1].lower()
+            if f'Extension="{ext}"' not in ct:
+                d = re.search(r'<Default\b[^>]*?Extension="%s"[^>]*?/>' % re.escape(ext),
+                              src_content_types)
+                if d:
+                    ct = ct.replace("</Types>", d.group(0) + "</Types>")
+        out_parts["[Content_Types].xml"] = ct.encode("utf-8")
+
+    remaining = [p for p in out_parts if p not in order]
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for part in order + sorted(remaining):
+            z.writestr(part, out_parts[part])
+    return total
+
+
 # 印刷ヘッダー/フッターは「奇数/偶数/先頭ページ」×「左/中央/右」で保持される
 _HF_GROUPS = ("oddHeader", "oddFooter", "evenHeader", "evenFooter", "firstHeader", "firstFooter")
 _HF_PARTS = ("left", "center", "right")
@@ -1183,6 +1431,9 @@ def _iter_xlsx_all_texts(source):
             # シート名そのもの（「〇〇工業_台帳」のように客先名が入ることがある）
             if ws.title.strip():
                 yield ws.title, "シート名", ws.title, False
+        # 図形・テキストボックス・グラフ（openpyxl では読めないためZIPから直接読む）
+        for where, text in _iter_xlsx_drawing_texts(source):
+            yield where, "図形テキスト", text, False
         # 作成者・会社名等の文書プロパティ
         for where, text in _iter_ooxml_property_texts(source):
             yield "(ブック)", where, text, False
@@ -1282,6 +1533,9 @@ def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
     wb.save(str(output_path))
     wb.close()
     wb_cached.close()
+
+    # 図形・テキストボックスは openpyxl の保存で失われるため、原本から戻す
+    total += _restore_xlsx_drawings(input_path, output_path, rules)
 
     # 作成者・会社名等の文書プロパティは保存後にZIPを直接書き換える
     total += _mask_ooxml_properties(output_path, rules)

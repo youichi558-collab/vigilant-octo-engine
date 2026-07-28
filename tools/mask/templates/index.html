@@ -435,8 +435,9 @@
                onchange="importSettings(this)">
       </div>
       <div id="configMsg" style="font-size:11px; color:#666; margin-top:6px; line-height:1.6;">
-        入力した値と自動検出パターンの設定をファイルに保存できます。<br>
-        同じ客先の案件では読み込むだけで再利用できます。
+        入力した値・自動検出パターン・チェックした検出候補を保存できます。<br>
+        同じ客先の案件では読み込むだけで再利用できます。<br>
+        読み込んだ検出候補は、今回のファイルで検出されなくても必ずマスクされます。
       </div>
     </div>
 
@@ -599,6 +600,98 @@ function onValueInput(el) {
   el.classList.toggle('has-value', el.value.trim().length > 0);
 }
 
+// ---------- 自動検出候補の一覧 ----------
+// このファイルから検出した候補
+let lastDetected = [];
+// 設定ファイルから読み込んだ、常に対象にする値。ファイルを選び直しても消えない。
+// 検出は万能ではないので、一度確認した客先名・担当者名は設定として持ち回り、
+// 今回のファイルで検出できなくても必ずマスクされるようにする。
+let savedCandidates = [];
+
+function buildCandidateItem(value, label, fromSettings) {
+  const item = document.createElement('div');
+  item.className = 'candidate-item';
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.dataset.label = label;
+  cb.checked = !!fromSettings;
+
+  // 検出結果はそのまま使えるとは限らない（余計な文字が付く/足りない）ため、
+  // 実行前にこの場で直せるようにする。マスクは編集後の文字列で行う。
+  const val = document.createElement('input');
+  val.type = 'text';
+  val.className = 'candidate-val-input';
+  val.value = value;
+  val.dataset.original = value;
+  val.title = 'マスクする文字列。修正できます';
+  val.addEventListener('input', () => {
+    // 編集したら対象にする意思があるとみなしてチェックを入れる
+    cb.checked = true;
+    val.classList.toggle('edited', val.value !== val.dataset.original);
+    if (fromSettings) syncSavedCandidates();
+  });
+  if (fromSettings) {
+    // チェックを外したら「この値はもう消さない」という指示なので設定からも落とす。
+    // そうしないとファイルを選び直すたびに復活してしまう。
+    cb.addEventListener('change', syncSavedCandidates);
+  }
+
+  const tag = document.createElement('span');
+  tag.className = 'candidate-tag';
+  tag.textContent = fromSettings ? label + '・設定' : label;
+  if (fromSettings) {
+    tag.style.background = '#eef3ff';
+    tag.style.color = '#2f4f9e';
+    tag.title = '設定ファイルから読み込んだ値です（このファイルでの検出有無によらず適用）';
+  }
+
+  item.appendChild(cb);
+  item.appendChild(val);
+  item.appendChild(tag);
+  return item;
+}
+
+function renderAutoScanList() {
+  const panel = document.getElementById('autoScanPanel');
+  const list  = document.getElementById('autoScanList');
+  list.innerHTML = '';
+
+  const seen = new Set();
+  const rows = [];
+  // 設定から読み込んだ値を先に、チェック済みで並べる
+  savedCandidates.forEach(c => {
+    if (seen.has(c.value)) return;
+    seen.add(c.value);
+    rows.push([c.value, c.label, true]);
+  });
+  lastDetected.forEach(c => {
+    if (seen.has(c.value)) return;
+    seen.add(c.value);
+    rows.push([c.value, c.label, false]);
+  });
+
+  panel.style.display = (rows.length || currentPdfFile) ? 'block' : 'none';
+  if (!rows.length) {
+    list.innerHTML = '<span style="font-size:12px;color:#888;">検出候補なし</span>';
+    return;
+  }
+  rows.forEach(r => list.appendChild(buildCandidateItem(r[0], r[1], r[2])));
+}
+
+function syncSavedCandidates() {
+  const kept = [];
+  document.querySelectorAll('#autoScanList .candidate-item').forEach(item => {
+    const cb  = item.querySelector('input[type=checkbox]');
+    const val = item.querySelector('.candidate-val-input');
+    const isSaved = item.querySelector('.candidate-tag').textContent.endsWith('・設定');
+    if (isSaved && cb.checked && val.value.trim()) {
+      kept.push({ value: val.value.trim(), label: cb.dataset.label });
+    }
+  });
+  savedCandidates = kept;
+}
+
 // ---------- 設定の保存・読込 ----------
 // 入力欄の並び順ではなく key で対応付ける。mask_config.yaml に項目を
 // 足したり順番を変えたりしても、保存済み設定が別の欄に入らないようにするため。
@@ -609,7 +702,7 @@ function configMsg(text, color) {
 }
 
 function exportSettings() {
-  const data = { version: 1, values: {}, patterns: {} };
+  const data = { version: 2, values: {}, patterns: {}, candidates: [] };
   document.querySelectorAll('input[name^="val_"]').forEach(el => {
     if (el.value.trim()) data.values[el.dataset.key] = el.value.trim();
   });
@@ -617,7 +710,20 @@ function exportSettings() {
     data.patterns[el.dataset.key] = el.checked;
   });
 
-  const n = Object.keys(data.values).length;
+  // チェックした自動検出候補も保存する。同じ客先の別ファイルでは検出のされ方が
+  // 変わる（表記ゆれ・図形の中・プロパティのみ等）ため、一度確認した値を
+  // 持ち回れないと毎回チェックし直すことになり、拾い漏れも起きる。
+  const seen = new Set();
+  document.querySelectorAll('#autoScanList .candidate-item').forEach(item => {
+    const cb  = item.querySelector('input[type=checkbox]');
+    const val = item.querySelector('.candidate-val-input');
+    const v = val ? val.value.trim() : '';
+    if (cb && cb.checked && v && !seen.has(v)) {
+      seen.add(v);
+      data.candidates.push({ value: v, label: cb.dataset.label });
+    }
+  });
+
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -625,7 +731,8 @@ function exportSettings() {
   a.download = 'マスク設定.json';
   a.click();
   URL.revokeObjectURL(url);
-  configMsg('保存しました（入力値 ' + n + '件）', '#1a6e3e');
+  configMsg('保存しました（入力値 ' + Object.keys(data.values).length +
+            '件／検出候補 ' + data.candidates.length + '件）', '#1a6e3e');
 }
 
 function importSettings(input) {
@@ -664,7 +771,16 @@ function importSettings(input) {
         el.checked = !!patterns[el.dataset.key];
       }
     });
-    let msg = '読み込みました（入力値 ' + applied + '件）';
+    // 保存された検出候補は、今回のファイルで検出できたかによらず対象にする
+    // （version 1 の設定ファイルには candidates が無いので、その場合は空のまま）
+    const seen = new Set();
+    savedCandidates = (data.candidates || [])
+      .map(c => ({ value: String((c && c.value) || '').trim(),
+                   label: String((c && c.label) || '検出候補') }))
+      .filter(c => c.value && !seen.has(c.value) && seen.add(c.value));
+    renderAutoScanList();
+
+    let msg = '読み込みました（入力値 ' + applied + '件／検出候補 ' + savedCandidates.length + '件）';
     if (missing.length) msg += ' ／ 該当欄なし: ' + missing.join('、');
     configMsg(msg, missing.length ? '#7a5c00' : '#1a6e3e');
     input.value = '';
@@ -903,12 +1019,10 @@ function onFileSelect(input) {
   const isPdf = file && file.name.toLowerCase().endsWith('.pdf');
 
   // 自動検出候補パネル（全形式共通）
-  const autoScanPanel  = document.getElementById('autoScanPanel');
-  const autoScanList   = document.getElementById('autoScanList');
   const autoScanLoading = document.getElementById('autoScanLoading');
-  autoScanList.innerHTML = '';
+  lastDetected = [];
+  renderAutoScanList();
   if (file) {
-    autoScanPanel.style.display = 'block';
     autoScanLoading.style.display = 'block';
     (async () => {
       try {
@@ -917,48 +1031,14 @@ function onFileSelect(input) {
         const res = await fetch('/scan_candidates', { method: 'POST', body: fd });
         const data = await res.json();
         autoScanLoading.style.display = 'none';
-        if (!data.candidates || data.candidates.length === 0) {
-          autoScanList.innerHTML = '<span style="font-size:12px;color:#888;">検出候補なし</span>';
-          return;
-        }
-        data.candidates.forEach(c => {
-          const item = document.createElement('div');
-          item.className = 'candidate-item';
-
-          const cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.dataset.label = c.label;
-
-          // 検出結果はそのまま使えるとは限らない（余計な文字が付く/足りない）ため、
-          // 実行前にこの場で直せるようにする。マスクは編集後の文字列で行う。
-          const val = document.createElement('input');
-          val.type = 'text';
-          val.className = 'candidate-val-input';
-          val.value = c.value;
-          val.dataset.original = c.value;
-          val.title = 'マスクする文字列。修正できます';
-          // 編集したら対象にする意思があるとみなしてチェックを入れる
-          val.addEventListener('input', () => {
-            cb.checked = true;
-            val.classList.toggle('edited', val.value !== val.dataset.original);
-          });
-
-          const tag = document.createElement('span');
-          tag.className = 'candidate-tag';
-          tag.textContent = c.label;
-
-          item.appendChild(cb);
-          item.appendChild(val);
-          item.appendChild(tag);
-          autoScanList.appendChild(item);
-        });
+        lastDetected = data.candidates || [];
+        renderAutoScanList();
       } catch (e) {
         autoScanLoading.style.display = 'none';
-        autoScanList.innerHTML = '<span style="font-size:12px;color:#c0392b;">検出エラー</span>';
+        document.getElementById('autoScanList').innerHTML =
+          '<span style="font-size:12px;color:#c0392b;">検出エラー</span>';
       }
     })();
-  } else {
-    autoScanPanel.style.display = 'none';
   }
 
   // 候補検出パネル
