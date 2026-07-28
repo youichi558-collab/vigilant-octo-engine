@@ -239,6 +239,9 @@ def scan_file_candidates(filename: str, raw: bytes, extra_patterns: list[dict] |
     elif suffix == ".docx":
         import io
         return scan_docx_candidates(io.BytesIO(raw), extra_patterns)
+    elif suffix == ".xlsx":
+        import io
+        return scan_xlsx_candidates(io.BytesIO(raw), extra_patterns)
     elif suffix in TEXT_SUFFIXES or suffix == "":
         return scan_plain_text_candidates(raw, extra_patterns)
     return []
@@ -406,6 +409,9 @@ def audit_file(filename: str, raw: bytes, literal_texts: list[str] | None = None
     if suffix == ".docx":
         import io
         return audit_docx(io.BytesIO(raw), literal_texts, regex_rules, generalize)
+    elif suffix == ".xlsx":
+        import io
+        return audit_xlsx(io.BytesIO(raw), literal_texts, regex_rules, generalize)
     elif suffix in TEXT_SUFFIXES or suffix == "":
         return audit_text_file(raw, literal_texts, regex_rules, generalize)
     return []
@@ -716,6 +722,102 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
     return total
 
 
+# ---------- XLSX ----------
+
+def _iter_xlsx_string_cells(wb):
+    """全シートの文字列セルを (シート名, セル位置, 値) で列挙する（数式セルは除く）"""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                val = cell.value
+                if not isinstance(val, str) or not val.strip():
+                    continue
+                if cell.data_type == "f" or val.startswith("="):
+                    continue  # 数式セルは対象外（書き換えるとシートが壊れるため）
+                yield ws.title, cell.coordinate, val
+
+
+def extract_xlsx_text(source) -> str:
+    """XLSXの全シートの文字列セル（数式を除く）を改行区切りで抽出する（sourceはパスまたはfile-like）"""
+    try:
+        import openpyxl
+    except ImportError:
+        return ""
+    wb = openpyxl.load_workbook(source, data_only=False)
+    text = "\n".join(val for _, _, val in _iter_xlsx_string_cells(wb))
+    wb.close()
+    return text
+
+
+def scan_xlsx_candidates(source, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """XLSXの文字列セルからマスク候補を検出して返す"""
+    return scan_text_candidates(extract_xlsx_text(source), extra_patterns)
+
+
+def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
+    try:
+        import openpyxl
+    except ImportError:
+        sys.exit("エラー: pip install openpyxl が必要です")
+
+    shutil.copy2(input_path, output_path)
+    wb = openpyxl.load_workbook(str(output_path), data_only=False)
+    total = 0
+
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                val = cell.value
+                if not isinstance(val, str) or not val:
+                    continue
+                if cell.data_type == "f" or val.startswith("="):
+                    continue  # 数式セルは対象外（書き換えるとシートが壊れるため）
+                new_val, n = apply_rules(val, rules)
+                if n:
+                    cell.value = new_val
+                    total += n
+
+    wb.save(str(output_path))
+    wb.close()
+    return total
+
+
+def audit_xlsx(source, literal_texts: list[str] | None = None,
+               regex_rules: list[MaskRule] | None = None,
+               generalize: bool = False) -> list[dict]:
+    """マスク済みXLSXを再スキャンし、対象文字列・形式・パターンが残っているセルを返す。
+
+    戻り値: [{"location": "シート名!セル位置", "hits": [検出内容, ...]}, ...]
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        return []
+
+    literals, gen_pats = _build_audit_matchers(literal_texts, generalize)
+
+    wb = openpyxl.load_workbook(source, data_only=False)
+    flagged = []
+    for sheet_name, coord, raw_val in _iter_xlsx_string_cells(wb):
+        stream = _norm_str(raw_val)
+        hits = []
+        for lit in literals:
+            if lit in stream:
+                hits.append(f"文字列: {lit[:20]}")
+        for pat in gen_pats:
+            m = pat.search(stream)
+            if m:
+                hits.append(f"形式一致: {m.group()[:20]}")
+        for rule in (regex_rules or []):
+            m = rule.pattern.search(raw_val)
+            if m:
+                hits.append(f"{rule.label}: {m.group()[:20]}")
+        if hits:
+            flagged.append({"location": f"{sheet_name}!{coord}", "hits": sorted(set(hits))})
+    wb.close()
+    return flagged
+
+
 # ---------- ディスパッチ ----------
 
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".log", ".ini", ".json", ".xml", ".html", ".htm"}
@@ -728,6 +830,9 @@ def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], ima
     elif suffix == ".docx":
         count = mask_docx(input_path, output_path, rules)
         print(f"  [DOCX]  {count:4d}箇所 ラベル置換 → {output_path.name}")
+    elif suffix == ".xlsx":
+        count = mask_xlsx(input_path, output_path, rules)
+        print(f"  [XLSX]  {count:4d}箇所 ラベル置換 → {output_path.name}")
     elif suffix in TEXT_SUFFIXES or suffix == "":
         count = mask_text_file(input_path, output_path, rules)
         print(f"  [TEXT]  {count:4d}箇所 ラベル置換 → {output_path.name}")
