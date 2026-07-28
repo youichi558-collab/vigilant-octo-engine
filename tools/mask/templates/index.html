@@ -301,6 +301,21 @@
   }
   .candidate-item:last-child { border-bottom: none; }
   .candidate-item input[type=checkbox] { accent-color: #e63946; width: 15px; height: 15px; flex-shrink: 0; }
+  .btn-config {
+    flex: 1;
+    padding: 8px 10px;
+    background: #fff;
+    border: 1px solid #d0d0d8;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1a1a2e;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .btn-config:hover { border-color: #1a1a2e; background: #f8f8fa; }
+
   .candidate-val { flex: 1; font-weight: 600; color: #1a1a2e; word-break: break-all; }
   /* 検出結果はそのまま使えるとは限らないため、実行前に直せる入力欄にする */
   .candidate-val-input {
@@ -412,22 +427,17 @@
     <div class="panel-title">マスク設定</div>
 
     <div class="section">
-      <div class="section-label">名簿（常に必ずマスク）</div>
-      {% if name_list_count %}
-      <div style="font-size:12px;color:#1a6e3e;background:#f0faf4;border:1px solid #9ee6b8;border-radius:6px;padding:8px 10px;">
-        <b>{{ name_list_count }}件</b> 登録済み。チェック不要で必ずマスクされます。<br>
-        <span style="color:#666;">追加・修正: <code style="font-size:11px;">mask_names.txt</code></span>
+      <div class="section-label">設定の保存・読込</div>
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="btn-config" onclick="exportSettings()">💾 保存</button>
+        <button type="button" class="btn-config" onclick="document.getElementById('importConfig').click()">📂 読込</button>
+        <input type="file" id="importConfig" accept=".json" style="display:none"
+               onchange="importSettings(this)">
       </div>
-      {% else %}
-      <div style="font-size:12px;color:#7a5c00;background:#fff8ec;border:1px solid #f0c780;border-radius:6px;padding:8px 10px;line-height:1.7;">
-        未登録です。自動検出は姓の辞書に無い名字を<b>取りこぼします</b>。<br>
-        繰り返し出てくる氏名・客先名を登録すると、以降は確実にマスクされます。<br>
-        <span style="color:#666;">
-          <code style="font-size:11px;">mask_names.txt.sample</code> を
-          <code style="font-size:11px;">mask_names.txt</code> にコピーして1行1件で記入
-        </span>
+      <div id="configMsg" style="font-size:11px; color:#666; margin-top:6px; line-height:1.6;">
+        入力した値と自動検出パターンの設定をファイルに保存できます。<br>
+        同じ客先の案件では読み込むだけで再利用できます。
       </div>
-      {% endif %}
     </div>
 
     <div class="section">
@@ -438,6 +448,8 @@
           <input
             type="text"
             name="val_{{ loop.index0 }}"
+            data-key="{{ rule.key }}"
+            data-label="{{ rule.label }}"
             placeholder="{{ rule.placeholder }}"
             autocomplete="off"
             spellcheck="false"
@@ -458,7 +470,7 @@
         </div>
         <div class="toggle-wrap">
           <label class="toggle">
-            <input type="checkbox" name="pat_{{ loop.index0 }}" checked>
+            <input type="checkbox" name="pat_{{ loop.index0 }}" data-key="{{ rule.key }}" data-label="{{ rule.label }}" checked>
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -585,6 +597,79 @@
 <script>
 function onValueInput(el) {
   el.classList.toggle('has-value', el.value.trim().length > 0);
+}
+
+// ---------- 設定の保存・読込 ----------
+// 入力欄の並び順ではなく key で対応付ける。mask_config.yaml に項目を
+// 足したり順番を変えたりしても、保存済み設定が別の欄に入らないようにするため。
+function configMsg(text, color) {
+  const el = document.getElementById('configMsg');
+  el.textContent = text;
+  el.style.color = color || '#666';
+}
+
+function exportSettings() {
+  const data = { version: 1, values: {}, patterns: {} };
+  document.querySelectorAll('input[name^="val_"]').forEach(el => {
+    if (el.value.trim()) data.values[el.dataset.key] = el.value.trim();
+  });
+  document.querySelectorAll('input[name^="pat_"]').forEach(el => {
+    data.patterns[el.dataset.key] = el.checked;
+  });
+
+  const n = Object.keys(data.values).length;
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'マスク設定.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  configMsg('保存しました（入力値 ' + n + '件）', '#1a6e3e');
+}
+
+function importSettings(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let data;
+    try {
+      data = JSON.parse(reader.result);
+    } catch (e) {
+      configMsg('読み込めませんでした（JSONとして不正です）', '#c0392b');
+      input.value = '';
+      return;
+    }
+    let applied = 0, missing = [];
+    const values = data.values || {};
+    const byKey = {};
+    document.querySelectorAll('input[name^="val_"]').forEach(el => {
+      byKey[el.dataset.key] = el;
+    });
+    Object.keys(values).forEach(key => {
+      const el = byKey[key];
+      if (el) {
+        el.value = values[key];
+        onValueInput(el);
+        applied++;
+      } else {
+        // 設定ファイルにしか無い項目は捨てずに知らせる
+        missing.push(key);
+      }
+    });
+    const patterns = data.patterns || {};
+    document.querySelectorAll('input[name^="pat_"]').forEach(el => {
+      if (Object.prototype.hasOwnProperty.call(patterns, el.dataset.key)) {
+        el.checked = !!patterns[el.dataset.key];
+      }
+    });
+    let msg = '読み込みました（入力値 ' + applied + '件）';
+    if (missing.length) msg += ' ／ 該当欄なし: ' + missing.join('、');
+    configMsg(msg, missing.length ? '#7a5c00' : '#1a6e3e');
+    input.value = '';
+  };
+  reader.readAsText(file, 'utf-8');
 }
 
 // ---------- ページプレビュー読み込み ----------

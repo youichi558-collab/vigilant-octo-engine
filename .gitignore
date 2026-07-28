@@ -2,5 +2,5 @@ __pycache__/
 *.pyc
 *.pyo
 
-# マスクツールの名簿（実在の氏名・客先名が入るためコミットしない）
-tools/mask/mask_names.txt
+# マスクツールの設定（実在の氏名・客先名が入るためコミットしない）
+tools/mask/*マスク設定*.json

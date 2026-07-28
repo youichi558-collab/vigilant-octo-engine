@@ -110,56 +110,6 @@ def _decode_text_bytes(raw: bytes) -> str:
         return raw.decode("cp932", errors="replace")
 
 
-NAME_LIST_PATH = Path(__file__).parent / "mask_names.txt"
-
-
-def load_name_list(path: Path | None = None) -> list[MaskRule]:
-    """名簿ファイルを読み込み、必ずマスクするルールを返す。
-
-    自動検出は姓の辞書やパターンに依存するため、辞書に無い名字や特殊な表記は
-    構造上どうしても取りこぼす。繰り返し登場する自社・客先の固有名詞をここに
-    登録しておけば、検出結果に関係なく確実にマスクされる。
-
-    書式: 1行1件。「値」または「値,ラベル」。# 以降と空行は無視。
-    """
-    path = path or NAME_LIST_PATH
-    if not path.exists():
-        return []
-
-    rules: list[MaskRule] = []
-    seen: set[str] = set()
-    for raw_line in _decode_text_bytes(path.read_bytes()).splitlines():
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        value, _, label = line.partition(",")
-        value = value.strip()
-        label = label.strip() or "個人名"
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        rules.append(MaskRule(pattern=re.compile(tolerant_pattern(value)), label=f"《{label}》"))
-    # 長い語を先に適用する（「〇〇工業」より先に「〇〇工業株式会社」を消す）
-    rules.sort(key=lambda r: len(r.pattern.pattern), reverse=True)
-    return rules
-
-
-def load_name_list_values(path: Path | None = None) -> list[str]:
-    """名簿に登録されている値の一覧を返す（PDFの文字単位照合に渡す用）"""
-    path = path or NAME_LIST_PATH
-    if not path.exists():
-        return []
-    values = []
-    for raw_line in _decode_text_bytes(path.read_bytes()).splitlines():
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        value = line.partition(",")[0].strip()
-        if value and value not in values:
-            values.append(value)
-    return values
-
-
 def apply_rules(text: str, rules: list[MaskRule]) -> tuple[str, int]:
     count = 0
     for rule in rules:
