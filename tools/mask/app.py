@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from flask import Flask, jsonify, render_template, request, send_file
 
-from mask_tool import MaskRule, audit_pdf, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_pdf_candidates
+from mask_tool import MaskRule, audit_file, audit_pdf, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_file_candidates
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -94,10 +94,10 @@ def render_pages():
 @app.route("/scan_candidates", methods=["POST"])
 def scan_candidates():
     file = request.files.get("file")
-    if not file:
+    if not file or not file.filename:
         return jsonify({"candidates": []})
-    pdf_bytes = file.read()
-    candidates = scan_pdf_candidates(pdf_bytes)
+    raw = file.read()
+    candidates = scan_file_candidates(file.filename, raw)
     return jsonify({"candidates": candidates})
 
 
@@ -170,15 +170,17 @@ def process():
     output_name = Path(file.filename).stem + "_masked" + suffix
     response = send_file(str(tmp_out), as_attachment=True, download_name=output_name)
 
-    # マスク後検査: 対象がまだ残っているページを特定してヘッダーで返す
-    if suffix == ".pdf":
-        try:
+    # マスク後検査: 対象がまだ残っている箇所を特定してヘッダーで返す
+    try:
+        if suffix == ".pdf":
             flagged = audit_pdf(tmp_out, candidate_texts, rules, generalize)
-            audit_json = json.dumps(flagged[:50], ensure_ascii=False)
-            import base64
-            response.headers["X-Mask-Audit"] = base64.b64encode(audit_json.encode()).decode()
-        except Exception:
-            pass
+        else:
+            flagged = audit_file(file.filename, tmp_out.read_bytes(), candidate_texts, rules, generalize)
+        audit_json = json.dumps(flagged[:50], ensure_ascii=False)
+        import base64
+        response.headers["X-Mask-Audit"] = base64.b64encode(audit_json.encode()).decode()
+    except Exception:
+        pass
 
     return response
 

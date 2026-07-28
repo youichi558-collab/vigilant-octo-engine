@@ -73,11 +73,15 @@ def apply_rules(text: str, rules: list[MaskRule]) -> tuple[str, int]:
 
 # ---------- テキストファイル ----------
 
-def mask_text_file(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
+def _decode_text_bytes(raw: bytes) -> str:
     try:
-        text = input_path.read_text(encoding="utf-8")
+        return raw.decode("utf-8")
     except UnicodeDecodeError:
-        text = input_path.read_text(encoding="cp932", errors="replace")
+        return raw.decode("cp932", errors="replace")
+
+
+def mask_text_file(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
+    text = _decode_text_bytes(input_path.read_bytes())
     new_text, count = apply_rules(text, rules)
     output_path.write_text(new_text, encoding="utf-8")
     return count
@@ -164,43 +168,36 @@ def extract_page_text_candidates(pdf_bytes: bytes, page_num: int = 0) -> list[di
     return results
 
 
-def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:
-    """PDFテキストからマスク候補を検出して返す"""
-    try:
-        import fitz
-    except ImportError:
-        return []
+# スキャン用パターン（会社名・住所は新規、その他は既存パターンから値を拾う）
+SCAN_PATTERNS = [
+    ("会社名", r"(?:株式会社|有限会社|合同会社|一般社団法人|公益社団法人|特定非営利活動法人)[\w・\-－～（）()]{1,30}"),
+    ("会社名", r"[\w・\-－～（）()]{2,30}(?:株式会社|有限会社|合同会社)"),
+    ("住所",   r"(?:北海道|東京都|大阪府|京都府|神奈川県|埼玉県|千葉県|愛知県|福岡県|兵庫県"
+               r"|静岡県|茨城県|広島県|宮城県|新潟県|長野県|岐阜県|栃木県|群馬県|岡山県"
+               r"|三重県|熊本県|鹿児島県|山口県|愛媛県|長崎県|奈良県|青森県|岩手県|大分県"
+               r"|石川県|山形県|富山県|秋田県|香川県|和歌山県|山梨県|福島県|徳島県|高知県"
+               r"|島根県|宮崎県|鳥取県|福井県|佐賀県|沖縄県)"
+               r"[\S]{1,60}(?:市|区|町|村)[\S]{1,40}"),
+    ("電話番号", r"0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
+    ("携帯番号", r"0[789]0[\-－]\d{4}[\-－]\d{4}"),
+    ("FAX番号",  r"FAX[：:\s]*0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
+    ("メール",   r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
+    ("郵便番号", r"〒?\d{3}[\-－]\d{4}"),
+    ("IPアドレス", r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"),
+]
 
-    # スキャン用パターン（会社名・住所は新規、その他は既存パターンから値を拾う）
-    SCAN_PATTERNS = [
-        ("会社名", r"(?:株式会社|有限会社|合同会社|一般社団法人|公益社団法人|特定非営利活動法人)[\w・\-－～（）()]{1,30}"),
-        ("会社名", r"[\w・\-－～（）()]{2,30}(?:株式会社|有限会社|合同会社)"),
-        ("住所",   r"(?:北海道|東京都|大阪府|京都府|神奈川県|埼玉県|千葉県|愛知県|福岡県|兵庫県"
-                   r"|静岡県|茨城県|広島県|宮城県|新潟県|長野県|岐阜県|栃木県|群馬県|岡山県"
-                   r"|三重県|熊本県|鹿児島県|山口県|愛媛県|長崎県|奈良県|青森県|岩手県|大分県"
-                   r"|石川県|山形県|富山県|秋田県|香川県|和歌山県|山梨県|福島県|徳島県|高知県"
-                   r"|島根県|宮崎県|鳥取県|福井県|佐賀県|沖縄県)"
-                   r"[\S]{1,60}(?:市|区|町|村)[\S]{1,40}"),
-        ("電話番号", r"0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
-        ("携帯番号", r"0[789]0[\-－]\d{4}[\-－]\d{4}"),
-        ("FAX番号",  r"FAX[：:\s]*0\d{1,4}[\-－]\d{1,4}[\-－]\d{4}"),
-        ("メール",   r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
-        ("郵便番号", r"〒?\d{3}[\-－]\d{4}"),
-        ("IPアドレス", r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"),
-    ]
-    # 呼び出し元から追加パターンを受け取る場合
+
+def scan_text_candidates(text: str, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """任意のテキストからマスク候補を検出して返す（PDF/DOCX/テキスト共通）"""
+    patterns = list(SCAN_PATTERNS)
     for ep in (extra_patterns or []):
-        SCAN_PATTERNS.append((ep.get("label", "その他"), ep["pattern"]))
-
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    full_text = "\n".join(page.get_text() for page in doc)
-    doc.close()
+        patterns.append((ep.get("label", "その他"), ep["pattern"]))
 
     seen: set[str] = set()
     results: list[dict] = []
-    for label, pat in SCAN_PATTERNS:
+    for label, pat in patterns:
         try:
-            for m in re.finditer(pat, full_text):
+            for m in re.finditer(pat, text):
                 val = m.group().strip()
                 if val and val not in seen:
                     seen.add(val)
@@ -209,6 +206,42 @@ def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = No
             pass
 
     return results
+
+
+def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """PDFテキストからマスク候補を検出して返す"""
+    try:
+        import fitz
+    except ImportError:
+        return []
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    full_text = "\n".join(page.get_text() for page in doc)
+    doc.close()
+    return scan_text_candidates(full_text, extra_patterns)
+
+
+def scan_docx_candidates(source, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """DOCXテキストからマスク候補を検出して返す（sourceはパスまたはfile-like）"""
+    return scan_text_candidates(extract_docx_text(source), extra_patterns)
+
+
+def scan_plain_text_candidates(raw: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """テキストファイルの内容からマスク候補を検出して返す"""
+    return scan_text_candidates(_decode_text_bytes(raw), extra_patterns)
+
+
+def scan_file_candidates(filename: str, raw: bytes, extra_patterns: list[dict] | None = None) -> list[dict]:
+    """ファイル種別を判定してマスク候補を検出して返す（PDF/DOCX/テキスト共通の入口）"""
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".pdf":
+        return scan_pdf_candidates(raw, extra_patterns)
+    elif suffix == ".docx":
+        import io
+        return scan_docx_candidates(io.BytesIO(raw), extra_patterns)
+    elif suffix in TEXT_SUFFIXES or suffix == "":
+        return scan_plain_text_candidates(raw, extra_patterns)
+    return []
 
 
 def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 10, scale: float = 1.5, start_page: int = 0) -> list[dict]:
@@ -263,6 +296,24 @@ def _generalize_pattern(tn: str) -> str:
     return "".join(parts)
 
 
+def _norm_str(s: str) -> str:
+    return "".join(_norm_char(c) for c in s if not c.isspace())
+
+
+def _build_audit_matchers(literal_texts: list[str] | None, generalize: bool) -> tuple[list[str], list[re.Pattern]]:
+    """監査(残存チェック)用の照合対象を組み立てる。戻り値: (正規化済みリテラル一覧, 汎化パターン一覧)"""
+    literals = [_norm_str(t) for t in (literal_texts or []) if _norm_str(t)]
+    gen_pats = []
+    if generalize:
+        for tn in literals:
+            if len(tn) >= 6:
+                try:
+                    gen_pats.append(re.compile(_generalize_pattern(tn)))
+                except re.error:
+                    pass
+    return literals, gen_pats
+
+
 def audit_pdf(pdf_path: Path, literal_texts: list[str] | None = None,
               regex_rules: list[MaskRule] | None = None,
               generalize: bool = False) -> list[dict]:
@@ -276,24 +327,13 @@ def audit_pdf(pdf_path: Path, literal_texts: list[str] | None = None,
     except ImportError:
         return []
 
-    def norm_str(s: str) -> str:
-        return "".join(_norm_char(c) for c in s if not c.isspace())
-
-    literals = [norm_str(t) for t in (literal_texts or []) if norm_str(t)]
-    gen_pats = []
-    if generalize:
-        for tn in literals:
-            if len(tn) >= 6:
-                try:
-                    gen_pats.append(re.compile(_generalize_pattern(tn)))
-                except re.error:
-                    pass
+    literals, gen_pats = _build_audit_matchers(literal_texts, generalize)
 
     doc = fitz.open(str(pdf_path))
     flagged = []
     for i, page in enumerate(doc):
         raw_text = page.get_text()
-        stream = norm_str(raw_text)
+        stream = _norm_str(raw_text)
         hits = []
         for lit in literals:
             if lit in stream:
@@ -310,6 +350,65 @@ def audit_pdf(pdf_path: Path, literal_texts: list[str] | None = None,
             flagged.append({"page": i + 1, "hits": sorted(set(hits))})
     doc.close()
     return flagged
+
+
+def audit_text_blob(text: str, literal_texts: list[str] | None = None,
+                     regex_rules: list[MaskRule] | None = None,
+                     generalize: bool = False, unit: str = "行") -> list[dict]:
+    """任意のテキストを行単位で再スキャンし、対象文字列・形式・パターンが残っている行を返す。
+
+    DOCX/テキストファイルの監査に使う（PDFのページ単位に相当する行/段落単位）。
+    戻り値: [{"location": "行N" 等, "hits": [検出内容, ...]}, ...]
+    """
+    literals, gen_pats = _build_audit_matchers(literal_texts, generalize)
+
+    flagged = []
+    for i, line in enumerate(text.splitlines()):
+        if not line.strip():
+            continue
+        stream = _norm_str(line)
+        hits = []
+        for lit in literals:
+            if lit in stream:
+                hits.append(f"文字列: {lit[:20]}")
+        for pat in gen_pats:
+            m = pat.search(stream)
+            if m:
+                hits.append(f"形式一致: {m.group()[:20]}")
+        for rule in (regex_rules or []):
+            m = rule.pattern.search(line)
+            if m:
+                hits.append(f"{rule.label}: {m.group()[:20]}")
+        if hits:
+            flagged.append({"location": f"{unit}{i + 1}", "hits": sorted(set(hits))})
+    return flagged
+
+
+def audit_docx(source, literal_texts: list[str] | None = None,
+               regex_rules: list[MaskRule] | None = None,
+               generalize: bool = False) -> list[dict]:
+    """マスク済みDOCXを再スキャンし、対象文字列・形式・パターンが残っている段落を返す"""
+    return audit_text_blob(extract_docx_text(source), literal_texts, regex_rules, generalize, unit="段落")
+
+
+def audit_text_file(raw: bytes, literal_texts: list[str] | None = None,
+                     regex_rules: list[MaskRule] | None = None,
+                     generalize: bool = False) -> list[dict]:
+    """マスク済みテキストファイルを再スキャンし、対象文字列・形式・パターンが残っている行を返す"""
+    return audit_text_blob(_decode_text_bytes(raw), literal_texts, regex_rules, generalize, unit="行")
+
+
+def audit_file(filename: str, raw: bytes, literal_texts: list[str] | None = None,
+               regex_rules: list[MaskRule] | None = None,
+               generalize: bool = False) -> list[dict]:
+    """ファイル種別を判定してマスク後の残存チェックを行う（PDFを除く共通の入口。PDFはaudit_pdfを直接使用）"""
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".docx":
+        import io
+        return audit_docx(io.BytesIO(raw), literal_texts, regex_rules, generalize)
+    elif suffix in TEXT_SUFFIXES or suffix == "":
+        return audit_text_file(raw, literal_texts, regex_rules, generalize)
+    return []
 
 
 def _redact_text_occurrences(page, targets: list[str], generalize: bool = False) -> int:
@@ -520,6 +619,43 @@ def mask_pdf(
 
 
 # ---------- DOCX ----------
+
+def extract_docx_text(source) -> str:
+    """DOCXから本文・表・ヘッダー/フッターの全テキストを抽出する（sourceはパスまたはfile-like）"""
+    try:
+        from docx import Document
+    except ImportError:
+        return ""
+
+    doc = Document(source)
+    parts: list[str] = []
+
+    def collect_paragraphs(paragraphs):
+        for p in paragraphs:
+            if p.text.strip():
+                parts.append(p.text)
+
+    def collect_table(table):
+        for row in table.rows:
+            for cell in row.cells:
+                collect_paragraphs(cell.paragraphs)
+                for nested in cell.tables:
+                    collect_table(nested)
+
+    collect_paragraphs(doc.paragraphs)
+    for table in doc.tables:
+        collect_table(table)
+
+    for section in doc.sections:
+        collect_paragraphs(section.header.paragraphs)
+        collect_paragraphs(section.footer.paragraphs)
+        for hdr in (section.even_page_header, section.first_page_header):
+            collect_paragraphs(hdr.paragraphs)
+        for ftr in (section.even_page_footer, section.first_page_footer):
+            collect_paragraphs(ftr.paragraphs)
+
+    return "\n".join(parts)
+
 
 def _process_paragraphs(paragraphs, rules: list[MaskRule]) -> int:
     count = 0
