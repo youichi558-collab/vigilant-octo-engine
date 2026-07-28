@@ -29,7 +29,7 @@ import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from mask_tool import MaskRule, apply_rules, tolerant_pattern  # noqa: E402
+from mask_tool import MaskRule, apply_rules, scan_file_candidates, tolerant_pattern  # noqa: E402
 
 # XLSXのZIP内パスと、その中身が何を表すかの対応
 # (マスクツール本体がセルとして読めるのは worksheets のみ)
@@ -139,26 +139,79 @@ def diagnose(file_path: Path, target: str) -> None:
     print("\n【3】マスクルールがこの値に一致するかの検証")
     print("-" * 70)
     rule = MaskRule(pattern=re.compile(tolerant_pattern(target)), label="《テスト》")
+    matched, unmatched = [], []
     for loc, text in visible_hits:
-        masked, n = apply_rules(text, [rule])
-        mark = "○" if n else "×"
-        print(f"  {mark} {loc}: {n}箇所一致")
-        if not n:
-            print(f"      セルの中身 : {text!r}")
-            print(f"      指定した値 : {target!r}")
-            print("      → 文字コードレベルの差異:")
-            print("        [セルの中身]")
-            print(_dump_chars(text))
-            print("        [指定した値]")
-            print(_dump_chars(target))
+        (matched if apply_rules(text, [rule])[1] else unmatched).append((loc, text))
+
+    print(f"  一致する  : {len(matched)}セル")
+    print(f"  一致しない: {len(unmatched)}セル")
+    if matched:
+        sample = "、".join(loc for loc, _ in matched[:5])
+        more = f" ほか{len(matched) - 5}セル" if len(matched) > 5 else ""
+        print(f"    一致例: {sample}{more}")
+    # 一致しないセルは原因究明に必要なので個別に出す（多い場合は先頭のみ）
+    for loc, text in unmatched[:3]:
+        print(f"\n  × {loc}")
+        print(f"      セルの中身 : {text!r}")
+        print(f"      指定した値 : {target!r}")
+        print("      → 文字コードレベルの差異:")
+        print("        [セルの中身]")
+        print(_dump_chars(text))
+        print("        [指定した値]")
+        print(_dump_chars(target))
+    if len(unmatched) > 3:
+        print(f"\n  （ほか{len(unmatched) - 3}セルは省略）")
+
+    # ---- 4. 自動検出パネルが実際に出す候補 ----
+    # 【3】が全一致なのにマスクされない場合、チェックした候補の文字列が
+    # ここで入力した値と違う（余計な文字を含む等）ことが原因になりうる。
+    print("\n【4】自動検出パネルがこの値について出す候補")
+    print("-" * 70)
+    print("  ※ 画面でチェックするのは下記の文字列です。")
+    print("     「この値そのもの」が候補に無い場合、チェックしても全部は消えません。")
+    print()
+    try:
+        candidates = scan_file_candidates(file_path.name, file_path.read_bytes())
+    except Exception as e:
+        candidates = []
+        print(f"  候補取得エラー: {e}")
+
+    related = [c for c in candidates if target_norm and target_norm in _norm(c["value"])]
+    exact = [c for c in related if _norm(c["value"]) == target_norm]
+
+    if related:
+        total = len(visible_hits)
+        for c in related:
+            c_rule = MaskRule(pattern=re.compile(tolerant_pattern(c["value"])), label="《テスト》")
+            covered = sum(1 for _, text in visible_hits if apply_rules(text, [c_rule])[1])
+            mark = "○" if covered == total else "△"
+            print(f"  {mark} 候補 {c['value']!r} [{c['label']}]")
+            print(f"      この候補をチェックした場合にマスクされるのは {covered}/{total} セル")
+    else:
+        print("  この値を含む候補は1件も出ていない")
+        print("  → 画面でチェックしようがないため、マスクされない")
+
+    if not exact:
+        print()
+        print(f"  ※ この値そのもの({target!r})は候補に出ていません。")
 
     # ---- 判定 ----
     print("\n【判定】")
     print("-" * 70)
-    if visible_hits and all(apply_rules(t, [rule])[1] for _, t in visible_hits):
-        print("  セルからも読めており、ルールも一致する。")
-        print("  → この値はマスクできるはず。マスク実行時に候補として")
-        print("     チェックが入っていたか確認してください。")
+    if visible_hits and not unmatched:
+        if exact:
+            print("  セルからも読め、ルールも全セルに一致し、候補にもこの値が出ている。")
+            print("  → 画面でこの候補にチェックを入れれば全てマスクされるはず。")
+            print("     チェック漏れがないか確認してください。")
+        else:
+            print("  セルからも読め、ルールも全セルに一致するが、")
+            print("  自動検出パネルにはこの値そのものが候補として出ていない。")
+            print("  → チェックできる候補が部分的にしか一致しないため、取りこぼす。")
+            print()
+            print("  【今すぐの回避策】")
+            print("    画面左の「置き換えリスト」の空欄に、この値を直接入力してから")
+            print(f"    マスク実行してください（入力する値: {target}）。")
+            print("    この経路なら全セルがマスクされます。")
     elif visible_hits:
         print("  セルからは読めるが、ルールが一致しない。")
         print("  → 【3】の文字コード差異が原因。この出力を共有してください。")
