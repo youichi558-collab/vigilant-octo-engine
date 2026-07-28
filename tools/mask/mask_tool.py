@@ -49,11 +49,15 @@ class MaskRule(NamedTuple):
 HYPHEN_CHARS = "‐‑‒–—―−ー－-"
 _HYPHEN_ALT = "|".join(re.escape(ch) for ch in dict.fromkeys(HYPHEN_CHARS))
 _DIGIT_CLASS = "[0-9０-９]"
+# 全角/半角スペース（「姓　名」のように区切りに使われる。全角スペースは通常の
+# 空白文字とは別扱いされるため、単純な\sだけでは拾えない）
+SPACE_CHARS = " 　"
+_SPACE_CLASS = "[ 　]"
 
 
 def tolerant_pattern(value: str) -> str:
-    """値の完全一致(re.escape)の代わりに、全角/半角の数字・ハイフン類の表記ゆれを
-    許容する正規表現パターン文字列を作る。
+    """値の完全一致(re.escape)の代わりに、全角/半角の数字・ハイフン類・スペースの
+    表記ゆれを許容する正規表現パターン文字列を作る。
 
     PDFの黒塗り(_redact_text_occurrences)は文字単位で正規化して照合するため
     表記ゆれに強いが、DOCX/XLSX/テキストのラベル置換(apply_rules)は単純な
@@ -67,6 +71,8 @@ def tolerant_pattern(value: str) -> str:
             parts.append(_DIGIT_CLASS)
         elif c in HYPHEN_CHARS:
             parts.append(f"(?:{_HYPHEN_ALT})")
+        elif c in SPACE_CHARS:
+            parts.append(_SPACE_CLASS)
         else:
             parts.append(re.escape(c))
     return "".join(parts)
@@ -286,8 +292,9 @@ SCAN_PATTERNS = [
     ("会社名/個人名(御中)", r"([^\s、。\n：:]{2,30})\s*御中"),
     ("会社名/個人名(様)",   r"([^\s、。\n：:]{2,20})\s*様(?!邸)"),
 
-    # 姓の辞書一致による個人名推定（名は漢字/カタカナのみ対象とし、助詞等のひらがなを含めない。誤検出あり・要確認）
-    ("個人名(推定)", rf"(?<![一-龥々])(?:{_SURNAME_ALT})[一-龥ァ-ヶー]{{1,3}}(?![一-龥ァ-ヶ])"),
+    # 姓の辞書一致による個人名推定（名は漢字/カタカナのみ対象とし、助詞等のひらがなを含めない。
+    # 姓と名の間の全角/半角スペース区切り「鈴木　一郎」「鈴木 一郎」にも対応。誤検出あり・要確認）
+    ("個人名(推定)", rf"(?<![一-龥々])(?:{_SURNAME_ALT})[ 　]?[一-龥ァ-ヶー]{{1,3}}(?![一-龥ァ-ヶ])"),
 ]
 
 
