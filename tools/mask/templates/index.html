@@ -302,6 +302,28 @@
   .candidate-item:last-child { border-bottom: none; }
   .candidate-item input[type=checkbox] { accent-color: #e63946; width: 15px; height: 15px; flex-shrink: 0; }
   .candidate-val { flex: 1; font-weight: 600; color: #1a1a2e; word-break: break-all; }
+  /* 検出結果はそのまま使えるとは限らないため、実行前に直せる入力欄にする */
+  .candidate-val-input {
+    flex: 1;
+    min-width: 0;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a1a2e;
+    padding: 3px 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    transition: border-color .15s, background .15s;
+  }
+  .candidate-val-input:hover { border-color: #d0d0d8; background: #fafafc; }
+  .candidate-val-input:focus {
+    outline: none;
+    border-color: #e63946;
+    background: #fff;
+    box-shadow: 0 0 0 2px rgba(230,57,70,.12);
+  }
+  .candidate-val-input.edited { border-color: #2ecc71; background: #f6fff9; }
   .candidate-tag {
     font-size: 10px;
     padding: 1px 6px;
@@ -467,7 +489,7 @@
       <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
         <span style="display:inline-block;width:3px;height:14px;background:#e63946;border-radius:2px;"></span>
         自動検出した候補
-        <span style="font-size:11px; font-weight:400; color:#888;">チェックしたものをマスク対象に追加</span>
+        <span style="font-size:11px; font-weight:400; color:#888;">チェックしたものをマスク／文字列は直接編集できます</span>
       </div>
       <div id="autoScanLoading" style="font-size:12px; color:#888; padding:4px 0;">候補を検出中…</div>
       <div id="autoScanList" style="max-height:200px; overflow-y:auto;"></div>
@@ -817,16 +839,29 @@ function onFileSelect(input) {
         data.candidates.forEach(c => {
           const item = document.createElement('div');
           item.className = 'candidate-item';
+
           const cb = document.createElement('input');
           cb.type = 'checkbox';
-          cb.value = c.value;
           cb.dataset.label = c.label;
-          const val = document.createElement('span');
-          val.className = 'candidate-val';
-          val.textContent = c.value;
+
+          // 検出結果はそのまま使えるとは限らない（余計な文字が付く/足りない）ため、
+          // 実行前にこの場で直せるようにする。マスクは編集後の文字列で行う。
+          const val = document.createElement('input');
+          val.type = 'text';
+          val.className = 'candidate-val-input';
+          val.value = c.value;
+          val.dataset.original = c.value;
+          val.title = 'マスクする文字列。修正できます';
+          // 編集したら対象にする意思があるとみなしてチェックを入れる
+          val.addEventListener('input', () => {
+            cb.checked = true;
+            val.classList.toggle('edited', val.value !== val.dataset.original);
+          });
+
           const tag = document.createElement('span');
           tag.className = 'candidate-tag';
           tag.textContent = c.label;
+
           item.appendChild(cb);
           item.appendChild(val);
           item.appendChild(tag);
@@ -969,10 +1004,15 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
     formData.append('candidate_regions', JSON.stringify(candidateRegions));
     formData.append('candidate_texts', JSON.stringify(candidateTexts));
 
-    // 自動検出候補（全形式共通）: チェックした値とその種別ラベルをペアで送る
+    // 自動検出候補（全形式共通）: チェックした値とその種別ラベルをペアで送る。
+    // 値は画面で編集された後の内容を使う（検出結果をそのまま使うとは限らない）。
     const autoScanChecked = [];
-    document.querySelectorAll('#autoScanList input[type=checkbox]:checked').forEach(cb => {
-      autoScanChecked.push({ value: cb.value, label: cb.dataset.label });
+    document.querySelectorAll('#autoScanList .candidate-item').forEach(item => {
+      const cb = item.querySelector('input[type=checkbox]');
+      const val = item.querySelector('.candidate-val-input');
+      if (cb && cb.checked && val && val.value.trim()) {
+        autoScanChecked.push({ value: val.value.trim(), label: cb.dataset.label });
+      }
     });
     formData.append('auto_scan_candidates', JSON.stringify(autoScanChecked));
 
