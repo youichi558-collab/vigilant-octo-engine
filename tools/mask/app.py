@@ -120,10 +120,24 @@ def process():
     config = parse_config(CONFIG_PATH)
     rules = build_rules(request.form, config["value_rules"], config["pattern_rules"])
 
-    # 候補リストから確定した値を追加
-    auto_scan_vals = [v.strip() for v in request.form.getlist("candidate_val") if v.strip()]
-    for val in auto_scan_vals:
-        rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label="《検出候補》"))
+    # 自動検出候補パネルでチェックされた値を追加。種別ラベル(会社名/電話番号/個人名など)を
+    # 引き継ぎ、マスク後の置換文字列にも反映する（一律「検出候補」にすると何の情報が
+    # 隠されたのか分からなくなるため）。"(略記)"/"(推定)"/"(ラベル)" 等の検出方式を示す
+    # 補足はUI上の区別用なので、置換ラベルには含めない。
+    try:
+        auto_scan_candidates = json.loads(request.form.get("auto_scan_candidates", "[]"))
+    except Exception:
+        auto_scan_candidates = []
+
+    auto_scan_vals = []
+    for item in auto_scan_candidates:
+        val = str(item.get("value", "")).strip()
+        if not val:
+            continue
+        raw_label = str(item.get("label") or "検出候補").strip()
+        base_label = raw_label.split("(")[0].split("（")[0].strip() or "検出候補"
+        auto_scan_vals.append(val)
+        rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label=f"《{base_label}》"))
 
     image_xrefs = [int(x) for x in request.form.getlist("img_xref") if x.isdigit()]
 

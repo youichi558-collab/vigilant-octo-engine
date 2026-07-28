@@ -800,8 +800,8 @@ function onFileSelect(input) {
           item.className = 'candidate-item';
           const cb = document.createElement('input');
           cb.type = 'checkbox';
-          cb.name = 'candidate_val';
           cb.value = c.value;
+          cb.dataset.label = c.label;
           const val = document.createElement('span');
           val.className = 'candidate-val';
           val.textContent = c.value;
@@ -949,6 +949,14 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
     });
     formData.append('candidate_regions', JSON.stringify(candidateRegions));
     formData.append('candidate_texts', JSON.stringify(candidateTexts));
+
+    // 自動検出候補（全形式共通）: チェックした値とその種別ラベルをペアで送る
+    const autoScanChecked = [];
+    document.querySelectorAll('#autoScanList input[type=checkbox]:checked').forEach(cb => {
+      autoScanChecked.push({ value: cb.value, label: cb.dataset.label });
+    });
+    formData.append('auto_scan_candidates', JSON.stringify(autoScanChecked));
+
     const response = await fetch('/process', { method: 'POST', body: formData });
 
     if (!response.ok) {
