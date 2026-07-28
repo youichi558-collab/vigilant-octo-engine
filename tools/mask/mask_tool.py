@@ -88,19 +88,26 @@ def load_rules(config_path: str) -> list[MaskRule]:
     with open(config_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    rules = []
+    value_rules: list[MaskRule] = []
+    pattern_rules: list[MaskRule] = []
     for m in data.get("masks", []):
         label = m.get("label", "[MASKED]")
         if "pattern" in m:
             try:
-                rules.append(MaskRule(pattern=re.compile(m["pattern"]), label=label))
+                pattern_rules.append(MaskRule(pattern=re.compile(m["pattern"]), label=label))
             except re.error as e:
                 print(f"警告: 正規表現エラー ({m['pattern']}): {e} — スキップします")
         elif "value" in m:
-            rules.append(MaskRule(pattern=re.compile(tolerant_pattern(m["value"])), label=label))
+            value_rules.append(MaskRule(pattern=re.compile(tolerant_pattern(m["value"])), label=label))
         else:
             print(f"警告: 'value' または 'pattern' がないエントリをスキップ: {m}")
-    return rules
+
+    # 値そのものを消すルールは長いものから適用する。ルールは上から順に置換するため、
+    # 短い値が先だと長い値の一部しか消えない
+    # （「山田」が先だと「山田工業株式会社」→「《マスク》工業株式会社」）。
+    # 書式パターンは適用順に意味がある（電話番号を郵便番号より先に等）ので並べ替えない。
+    value_rules.sort(key=lambda r: len(r.pattern.pattern), reverse=True)
+    return value_rules + pattern_rules
 
 
 def _decode_text_bytes(raw: bytes) -> str:

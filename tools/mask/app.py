@@ -60,18 +60,45 @@ def parse_config(config_path: Path) -> dict:
     return {"value_rules": value_rules, "pattern_rules": pattern_rules}
 
 
-def build_rules(form: dict, value_rules: list, pattern_rules: list) -> list[MaskRule]:
-    rules = []
+def collect_entered_values(form: dict, value_rules: list) -> list[tuple[str, str]]:
+    """置き換えリストに入力された (値, ラベル) を集める"""
+    entered = []
     for i, rule in enumerate(value_rules):
         val = form.get(f"val_{i}", "").strip()
         if val:
-            rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label=rule["label"]))
+            entered.append((val, rule["label"]))
+    return entered
+
+
+def build_pattern_rules(form: dict, pattern_rules: list) -> list[MaskRule]:
+    """ONになっている自動検出パターンのルールを設定ファイルの順で返す。
+
+    順序に意味がある（電話番号を郵便番号より先に適用する等）ため並べ替えない。
+    """
+    rules = []
     for i, rule in enumerate(pattern_rules):
         if form.get(f"pat_{i}") == "on":
             try:
                 rules.append(MaskRule(pattern=re.compile(rule["pattern"]), label=rule["label"]))
             except re.error:
                 pass
+    return rules
+
+
+def build_literal_rules(entries: list[tuple[str, str]]) -> list[MaskRule]:
+    """値そのものを消すルールを、長い値から順に適用されるよう並べて返す。
+
+    ルールは上から順に置換されるため、短い値が先だと長い値の一部しか消えない
+    （「山田」を先に適用すると「山田工業株式会社」→「《マスク》工業株式会社」）。
+    入力欄はどれも同じで候補の並びも検出順なので、利用者側では順序を制御できない。
+    """
+    rules = []
+    seen = set()
+    for val, label in sorted(entries, key=lambda x: len(x[0]), reverse=True):
+        if val in seen:
+            continue
+        seen.add(val)
+        rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label=label))
     return rules
 
 
@@ -131,9 +158,8 @@ def process():
         return jsonify({"error": "ファイルが選択されていません"}), 400
 
     config = parse_config(CONFIG_PATH)
-    rules = build_rules(request.form, config["value_rules"], config["pattern_rules"])
 
-    # 自動検出候補パネルでチェックされた値を追加。種別ラベル(会社名/電話番号/個人名など)を
+    # 自動検出候補パネルでチェックされた値。種別ラベル(会社名/電話番号/個人名など)を
     # 引き継ぎ、マスク後の置換文字列にも反映する（一律「検出候補」にすると何の情報が
     # 隠されたのか分からなくなるため）。"(略記)"/"(推定)"/"(ラベル)" 等の検出方式を示す
     # 補足はUI上の区別用なので、置換ラベルには含めない。
@@ -143,6 +169,7 @@ def process():
         auto_scan_candidates = []
 
     auto_scan_vals = []
+    literal_entries = collect_entered_values(request.form, config["value_rules"])
     for item in auto_scan_candidates:
         val = str(item.get("value", "")).strip()
         if not val:
@@ -152,7 +179,11 @@ def process():
         # 検出方式の呼び名がそのまま置換文字列になると不自然なため、意味の通る表記に寄せる
         base_label = {"姓のみ": "個人名"}.get(base_label, base_label)
         auto_scan_vals.append(val)
-        rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label=f"《{base_label}》"))
+        literal_entries.append((val, f"《{base_label}》"))
+
+    # 値そのものを消すルールを先に（長い値から）、書式パターンは設定順で後に適用する
+    rules = build_literal_rules(literal_entries) + build_pattern_rules(
+        request.form, config["pattern_rules"])
 
     image_xrefs = [int(x) for x in request.form.getlist("img_xref") if x.isdigit()]
 
