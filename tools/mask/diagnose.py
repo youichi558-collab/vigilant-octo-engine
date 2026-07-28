@@ -16,10 +16,9 @@
 ファイルはPC外に送信されない。
 
 使い方:
-  python 診断.py 対象ファイル.xlsx "マスクされずに残った値"
-
-  例:
-  python 診断.py 仕様書.xlsx "鈴木一郎"
+  Windows: 診断.bat に対象ファイルをドラッグ＆ドロップ（値は起動後に聞かれる）
+  直接実行: python diagnose.py [対象ファイル] ["マスクされずに残った値"]
+            引数を省略した場合は対話で入力を求める
 """
 
 import html
@@ -173,14 +172,35 @@ def diagnose(file_path: Path, target: str) -> None:
     print()
 
 
-def main() -> None:
-    if len(sys.argv) != 3:
-        print(__doc__)
+def _prompt(message: str) -> str:
+    """対話入力（バッチのset /pは文字コードの影響で入力待ちが素通りすることがあるため、
+    入力の受け付けはPython側で行う）"""
+    try:
+        return input(message).strip().strip('"').strip("'")
+    except (EOFError, KeyboardInterrupt):
+        print()
         sys.exit(1)
-    file_path = Path(sys.argv[1])
+
+
+def main() -> None:
+    args = sys.argv[1:]
+
+    raw_path = args[0] if args else _prompt("調べたいファイルをここにドラッグして Enter: ")
+    if not raw_path:
+        sys.exit("ファイルが指定されていません。")
+    file_path = Path(raw_path)
     if not file_path.exists():
-        sys.exit(f"エラー: ファイルが見つかりません: {file_path}")
-    diagnose(file_path, sys.argv[2])
+        sys.exit(f"ファイルが見つかりません: {file_path}")
+
+    target = args[1] if len(args) > 1 else _prompt("マスクされずに残った値を入力して Enter: ")
+    if not target:
+        sys.exit("値が入力されていません。")
+
+    diagnose(file_path, target)
+    print("=" * 70)
+    print(" 上の内容をコピーして共有してください")
+    print(" （値そのものが機密なら、その部分だけ伏せてください）")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
