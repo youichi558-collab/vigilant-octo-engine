@@ -121,10 +121,9 @@ def process():
     rules = build_rules(request.form, config["value_rules"], config["pattern_rules"])
 
     # 候補リストから確定した値を追加
-    for val in request.form.getlist("candidate_val"):
-        val = val.strip()
-        if val:
-            rules.append(MaskRule(pattern=re.compile(re.escape(val)), label="《検出候補》"))
+    auto_scan_vals = [v.strip() for v in request.form.getlist("candidate_val") if v.strip()]
+    for val in auto_scan_vals:
+        rules.append(MaskRule(pattern=re.compile(re.escape(val)), label="《検出候補》"))
 
     image_xrefs = [int(x) for x in request.form.getlist("img_xref") if x.isdigit()]
 
@@ -145,6 +144,13 @@ def process():
         candidate_texts = [t for t in json.loads(request.form.get("candidate_texts", "[]")) if t.strip()]
     except Exception:
         candidate_texts = []
+
+    # 自動検出候補(candidate_val)もPDFでは文字単位の頑健な照合(_redact_text_occurrences)に
+    # 合流させる。rulesだけに頼ると page.search_for() の単純一致に頼ることになり、
+    # テキストが複数オブジェクトに分割されている場合などに黒塗りが抜けることがある。
+    for val in auto_scan_vals:
+        if val not in candidate_texts:
+            candidate_texts.append(val)
 
     # 形式マスク: チェックした候補を形式パターンに汎化して全ページ照合
     generalize = request.form.get("generalize") == "on"
