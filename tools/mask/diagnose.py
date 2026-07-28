@@ -24,12 +24,20 @@
 import html
 import re
 import sys
+import tempfile
 import unicodedata
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from mask_tool import MaskRule, apply_rules, scan_file_candidates, tolerant_pattern  # noqa: E402
+from mask_tool import (  # noqa: E402
+    MaskRule,
+    _iter_xlsx_all_texts,
+    apply_rules,
+    process_file,
+    scan_file_candidates,
+    tolerant_pattern,
+)
 
 # XLSXのZIP内パスと、その中身が何を表すかの対応
 # (マスクツール本体がセルとして読めるのは worksheets のみ)
@@ -76,6 +84,35 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
+def _scan_raw_parts(file_path: Path, target_norm: str):
+    """ファイル内の全XMLパートを走査し、値を含むパートを役割ごとに返す。
+
+    openpyxl等がセルとして読める範囲に関係なく、実際に格納されている全てを見る。
+    ZIP形式でない場合は None を返す。
+    """
+    hits: dict[str, list[str]] = {}
+    try:
+        with zipfile.ZipFile(file_path) as z:
+            for name in z.namelist():
+                if not name.endswith((".xml", ".rels")):
+                    continue
+                try:
+                    content = z.read(name).decode("utf-8", errors="ignore")
+                except Exception:
+                    continue
+                # XMLタグを除去し、文字参照(&#37428; など)を実文字に戻してから比較
+                # (Excelは日本語を数値文字参照で保存することがあり、生文字列のままでは一致しない)
+                stripped = html.unescape(re.sub(r"<[^>]+>", "", content))
+                if target_norm and (
+                    target_norm in _norm(html.unescape(content))
+                    or target_norm in _norm(stripped)
+                ):
+                    hits.setdefault(_role_of(name), []).append(name)
+    except zipfile.BadZipFile:
+        return None
+    return hits
+
+
 def diagnose(file_path: Path, target: str) -> None:
     print("=" * 70)
     print(f"対象ファイル: {file_path.name}")
@@ -90,7 +127,6 @@ def diagnose(file_path: Path, target: str) -> None:
     visible_hits = []
     if file_path.suffix.lower() == ".xlsx":
         try:
-            from mask_tool import _iter_xlsx_all_texts
             for sheet, coord, text, is_formula in _iter_xlsx_all_texts(file_path):
                 if target_norm and target_norm in _norm(text):
                     visible_hits.append((f"{sheet}!{coord}" + ("(数式)" if is_formula else ""), text))
@@ -108,23 +144,10 @@ def diagnose(file_path: Path, target: str) -> None:
     # ---- 2. ファイルの生XML全体 ----
     print("\n【2】ファイル内部(生データ)での検出 ... 実際にどこに格納されているか")
     print("-" * 70)
-    raw_hits = {}
-    try:
-        with zipfile.ZipFile(file_path) as z:
-            for name in z.namelist():
-                if not name.endswith((".xml", ".rels")):
-                    continue
-                try:
-                    content = z.read(name).decode("utf-8", errors="ignore")
-                except Exception:
-                    continue
-                # XMLタグを除去し、文字参照(&#37428; など)を実文字に戻してから比較
-                # (Excelは日本語を数値文字参照で保存することがあり、生文字列のままでは一致しない)
-                stripped = html.unescape(re.sub(r"<[^>]+>", "", content))
-                if target_norm and (target_norm in _norm(html.unescape(content)) or target_norm in _norm(stripped)):
-                    raw_hits.setdefault(_role_of(name), []).append(name)
-    except zipfile.BadZipFile:
+    raw_hits = _scan_raw_parts(file_path, target_norm)
+    if raw_hits is None:
         print("  (ZIP形式ではないため生データ検査をスキップ)")
+        raw_hits = {}
 
     if raw_hits:
         for role, parts in raw_hits.items():
@@ -194,6 +217,49 @@ def diagnose(file_path: Path, target: str) -> None:
     if not exact:
         print()
         print(f"  ※ この値そのもの({target!r})は候補に出ていません。")
+
+    # ---- 5. 実際にマスクを実行して生き残るセルを調べる ----
+    # 【3】はセル単体にルールが一致するかを見るだけで、実際の書き込み処理
+    # (mask_xlsx等)を通していない。「候補にも出るしルールも一致するのに
+    # 一部しか消えない」場合、原因は照合ではなく書き込み側にあるため、
+    # 本物のマスク処理を通した結果を直接確認する。
+    print("\n【5】実際にマスクを実行した結果（本番と同じ処理を通す）")
+    print("-" * 70)
+    survivors = []
+    raw_survivors = {}
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            out_path = Path(td) / ("masked" + file_path.suffix)
+            process_file(file_path, out_path, [rule])
+            for sheet, coord, text, is_formula in _iter_xlsx_all_texts(out_path):
+                if target_norm and target_norm in _norm(text):
+                    survivors.append((f"{sheet}!{coord}", text, is_formula))
+            # セルとして読める範囲だけでなく、出力ファイル全体を再検査する
+            # (テキストボックス等、セル以外に残っていても気付けるように)
+            raw_survivors = _scan_raw_parts(out_path, target_norm)
+    except Exception as e:
+        print(f"  マスク実行エラー: {e}")
+        survivors = None
+
+    if survivors is None:
+        pass
+    elif not survivors and not raw_survivors:
+        print(f"  ○ 残存なし（{len(visible_hits)}セルすべてマスクされた）")
+    elif not survivors and raw_survivors:
+        print("  × セルからは消えたが、ファイル内には残っている")
+        for role, parts in raw_survivors.items():
+            print(f"      {role}: {'、'.join(parts)}")
+    else:
+        print(f"  × {len(survivors)}セルが残った（対象 {len(visible_hits)}セル中）")
+        print("     ↓ 残ったセルの中身。これが取りこぼしの実体です。")
+        for loc, text, is_formula in survivors[:10]:
+            kind = "数式セル" if is_formula else "通常セル"
+            print(f"\n  × {loc}  [{kind}]")
+            print(f"      中身: {text!r}")
+            print("      文字構成:")
+            print(_dump_chars(text[:40]))
+        if len(survivors) > 10:
+            print(f"\n  （ほか{len(survivors) - 10}セルは省略）")
 
     # ---- 判定 ----
     print("\n【判定】")

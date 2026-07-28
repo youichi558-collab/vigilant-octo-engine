@@ -63,6 +63,11 @@ def tolerant_pattern(value: str) -> str:
     表記ゆれに強いが、DOCX/XLSX/テキストのラベル置換(apply_rules)は単純な
     文字列一致のため、同じ電話番号でもセルによって全角/半角が混在していると
     一部だけマスクされ一部が素通りする、という不具合につながっていた。
+
+    さらに、日本語の帳票では字幅を揃えるために「遠　藤」「遠 藤」のように
+    文字と文字の間へ空白を挿入することがある(均等割り付けの手打ち版)。
+    見た目も検索結果も同じ値なのに、素の「遠藤」だけがマスクされて
+    空白入りが残るため、文字の間に空白があっても一致するようにする。
     """
     parts = []
     for c in value:
@@ -72,10 +77,11 @@ def tolerant_pattern(value: str) -> str:
         elif c in HYPHEN_CHARS:
             parts.append(f"(?:{_HYPHEN_ALT})")
         elif c in SPACE_CHARS:
-            parts.append(_SPACE_CLASS)
+            parts.append(f"{_SPACE_CLASS}+")
         else:
             parts.append(re.escape(c))
-    return "".join(parts)
+    # 文字の間に挿入されうる空白を許容する(値自体が空白を含む位置は上で処理済み)
+    return f"{_SPACE_CLASS}*".join(parts)
 
 
 def load_rules(config_path: str) -> list[MaskRule]:
