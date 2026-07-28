@@ -390,6 +390,25 @@
     <div class="panel-title">マスク設定</div>
 
     <div class="section">
+      <div class="section-label">名簿（常に必ずマスク）</div>
+      {% if name_list_count %}
+      <div style="font-size:12px;color:#1a6e3e;background:#f0faf4;border:1px solid #9ee6b8;border-radius:6px;padding:8px 10px;">
+        <b>{{ name_list_count }}件</b> 登録済み。チェック不要で必ずマスクされます。<br>
+        <span style="color:#666;">追加・修正: <code style="font-size:11px;">mask_names.txt</code></span>
+      </div>
+      {% else %}
+      <div style="font-size:12px;color:#7a5c00;background:#fff8ec;border:1px solid #f0c780;border-radius:6px;padding:8px 10px;line-height:1.7;">
+        未登録です。自動検出は姓の辞書に無い名字を<b>取りこぼします</b>。<br>
+        繰り返し出てくる氏名・客先名を登録すると、以降は確実にマスクされます。<br>
+        <span style="color:#666;">
+          <code style="font-size:11px;">mask_names.txt.sample</code> を
+          <code style="font-size:11px;">mask_names.txt</code> にコピーして1行1件で記入
+        </span>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="section">
       <div class="section-label">置き換えリスト（実際の値を入力）</div>
       {% for rule in value_rules %}
       <div class="field-row">

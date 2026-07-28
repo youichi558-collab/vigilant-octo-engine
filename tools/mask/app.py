@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from flask import Flask, jsonify, render_template, request, send_file
 
-from mask_tool import MaskRule, audit_file, audit_pdf, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_file_candidates, tolerant_pattern
+from mask_tool import MaskRule, audit_file, audit_pdf, extract_page_text_candidates, extract_pdf_images, load_name_list, load_name_list_values, process_file, render_pdf_pages, scan_file_candidates, tolerant_pattern
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -65,7 +65,13 @@ def build_rules(form: dict, value_rules: list, pattern_rules: list) -> list[Mask
 @app.route("/")
 def index():
     config = parse_config(CONFIG_PATH)
-    return render_template("index.html", **config)
+    from mask_tool import NAME_LIST_PATH
+    return render_template(
+        "index.html",
+        name_list_count=len(load_name_list_values()),
+        name_list_path=str(NAME_LIST_PATH),
+        **config,
+    )
 
 
 @app.route("/render_pages", methods=["POST"])
@@ -120,6 +126,13 @@ def process():
     config = parse_config(CONFIG_PATH)
     rules = build_rules(request.form, config["value_rules"], config["pattern_rules"])
 
+    # 名簿（mask_names.txt）に登録された固有名詞は、チェックの有無に関係なく必ずマスクする。
+    # 自動検出は姓の辞書やパターンに依存するため辞書外の名字を構造的に取りこぼす。
+    # 長い語を先に消すため、名簿ルールを他のルールより前に置く。
+    name_list_rules = load_name_list()
+    rules = name_list_rules + rules
+    name_list_vals = load_name_list_values()
+
     # 自動検出候補パネルでチェックされた値を追加。種別ラベル(会社名/電話番号/個人名など)を
     # 引き継ぎ、マスク後の置換文字列にも反映する（一律「検出候補」にすると何の情報が
     # 隠されたのか分からなくなるため）。"(略記)"/"(推定)"/"(ラベル)" 等の検出方式を示す
@@ -164,7 +177,7 @@ def process():
     # 自動検出候補(candidate_val)もPDFでは文字単位の頑健な照合(_redact_text_occurrences)に
     # 合流させる。rulesだけに頼ると page.search_for() の単純一致に頼ることになり、
     # テキストが複数オブジェクトに分割されている場合などに黒塗りが抜けることがある。
-    for val in auto_scan_vals:
+    for val in auto_scan_vals + name_list_vals:
         if val not in candidate_texts:
             candidate_texts.append(val)
 
