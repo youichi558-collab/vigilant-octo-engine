@@ -45,7 +45,9 @@ def parse_config(config_path: Path) -> dict:
             # 複数あるため label では区別できない。未指定なら通し番号で代用する。
             value_rules.append({
                 "key": str(m.get("key") or f"value_{i}"),
-                "placeholder": m["value"],
+                # 入力欄の説明は全欄共通にする。何に置き換わるかは欄の右の
+                # ラベル表示で分かるため、欄ごとの説明文は不要。
+                "placeholder": "マスクする値を入力",
                 "label": label,
                 "value": "",
             })
