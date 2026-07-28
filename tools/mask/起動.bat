@@ -10,7 +10,7 @@ if %errorlevel%==0 (
     git -C "%~dp0..\.." pull origin main
 )
 
-py -m pip install -q -r "%~dp0requirements.txt" flask
+py -m pip install -q -r "%~dp0requirements.txt"
 
 start http://localhost:5000
 py "%~dp0app.py"

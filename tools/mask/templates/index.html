@@ -1138,7 +1138,10 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
         if (flagged.length > 0) {
           const list = document.getElementById('auditList');
           list.innerHTML = flagged.map(f => {
-            const loc = (f.page !== undefined) ? `p.${f.page}` : f.location;
+            // page=0 はページ本文ではなくPDFの文書情報（タイトル・作成者等）を表す
+            const loc = (f.page !== undefined)
+              ? (f.page === 0 ? '文書情報' : `p.${f.page}`)
+              : f.location;
             return `<div>${loc}: ${f.hits.map(h => h.replace(/</g,'&lt;')).join(' / ')}</div>`;
           }).join('');
           auditBox.style.display = 'block';

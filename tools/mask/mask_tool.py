@@ -117,6 +117,97 @@ def _decode_text_bytes(raw: bytes) -> str:
         return raw.decode("cp932", errors="replace")
 
 
+# ---------- 文書プロパティ（DOCX/XLSX 共通） ----------
+
+# Office文書は本文とは別に「作成者」「最終更新者」「会社名」等をZIP内のXMLに保持する。
+# 画面上のどこにも現れないため見落とされやすいが、客先で作成された文書を
+# そのまま社外に出すと担当者名・客先社名がここから丸ごと漏れる。
+# core.xml : 作成者・最終更新者・タイトル・件名・キーワード・コメント
+# app.xml  : 会社名・管理者名・テンプレート名
+_OOXML_PROPERTY_PARTS = ("docProps/core.xml", "docProps/app.xml")
+
+# 人が入力した文字列を持つプロパティ項目だけを対象にする（名前空間の接頭辞を除いた
+# タグ名で判定）。ページ数・編集時間・アプリのバージョンといった内部値まで拾うと、
+# 候補一覧とマスク後検査が無意味な値で埋まってしまう。
+_OOXML_PROPERTY_TAGS = {
+    # docProps/core.xml
+    "title", "subject", "creator", "description",
+    "lastModifiedBy", "keywords", "category", "contentStatus",
+    # docProps/app.xml
+    "Company", "Manager", "Template",
+    # 文書タイトル・シート名の控え（app.xml の TitlesOfParts 内の文字列ベクタ）
+    "lpstr",
+}
+
+# 開始タグと終了タグに挟まれたテキストだけを取り出す。タグ名・属性・名前空間宣言には
+# 一切触れないため、置換しても文書構造を壊さない。
+_XML_ELEMENT = re.compile(r"<((?:[\w.\-]+:)?([\w.\-]+))(?:\s[^<>]*)?>([^<>]+)</\1>")
+
+
+def _iter_ooxml_property_texts(source):
+    """OOXML(DOCX/XLSX)の文書プロパティの文字列を (場所の説明, 文字列) で列挙する"""
+    import zipfile
+    if hasattr(source, "seek"):
+        source.seek(0)
+    try:
+        with zipfile.ZipFile(source) as z:
+            names = set(z.namelist())
+            for part in _OOXML_PROPERTY_PARTS:
+                if part not in names:
+                    continue
+                xml = z.read(part).decode("utf-8", "replace")
+                for m in _XML_ELEMENT.finditer(xml):
+                    if m.group(2) not in _OOXML_PROPERTY_TAGS:
+                        continue
+                    text = m.group(3).strip()
+                    if text:
+                        yield f"文書プロパティ({m.group(2)})", text
+    except (zipfile.BadZipFile, OSError):
+        return
+
+
+def _mask_ooxml_properties(path: Path, rules: list[MaskRule]) -> int:
+    """保存済みのDOCX/XLSXを開き直し、文書プロパティのテキストにルールを適用する。
+
+    python-docx/openpyxl はどちらもこれらのプロパティを一括で扱えないため、
+    ZIPを直接書き換える。テキストノードのみを対象にするので、タグや
+    名前空間宣言は元のまま保たれる。
+    """
+    import zipfile
+    total = 0
+    try:
+        with zipfile.ZipFile(path) as z:
+            items = [(info, z.read(info.filename)) for info in z.infolist()]
+    except (zipfile.BadZipFile, OSError):
+        return 0
+
+    new_items = []
+    for info, data in items:
+        if info.filename in _OOXML_PROPERTY_PARTS:
+            xml = data.decode("utf-8", "replace")
+
+            def repl(m, _rules=rules):
+                nonlocal total
+                if m.group(2) not in _OOXML_PROPERTY_TAGS:
+                    return m.group(0)
+                new_text, n = apply_rules(m.group(3), _rules)
+                total += n
+                return f"{m.group(0)[:m.start(3) - m.start(0)]}{new_text}</{m.group(1)}>"
+
+            new_xml = _XML_ELEMENT.sub(repl, xml)
+            data = new_xml.encode("utf-8")
+        new_items.append((info, data))
+
+    if not total:
+        return 0
+
+    # 書き換えが発生した場合のみ、元の圧縮方式・タイムスタンプを保って書き戻す
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for info, data in new_items:
+            z.writestr(info, data)
+    return total
+
+
 def apply_rules(text: str, rules: list[MaskRule]) -> tuple[str, int]:
     count = 0
     for rule in rules:
@@ -400,9 +491,15 @@ def scan_pdf_candidates(pdf_bytes: bytes, extra_patterns: list[dict] | None = No
         return []
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    full_text = "\n".join(page.get_text() for page in doc)
+    texts = [page.get_text() for page in doc]
+    # 文書情報（タイトル・作成者等）も候補の対象にする。ここを見ないと、
+    # ページ上に出てこない客先名・担当者名が候補一覧に現れず、
+    # 利用者がチェックする機会のないままファイルに残ってしまう。
+    meta = doc.metadata or {}
+    texts += [meta[f] for f in _PDF_METADATA_FIELDS
+              if isinstance(meta.get(f), str) and meta[f].strip()]
     doc.close()
-    return scan_text_candidates(full_text, extra_patterns)
+    return scan_text_candidates("\n".join(texts), extra_patterns)
 
 
 def scan_docx_candidates(source, extra_patterns: list[dict] | None = None) -> list[dict]:
@@ -500,6 +597,25 @@ def _build_audit_matchers(literal_texts: list[str] | None, generalize: bool) -> 
     return literals, gen_pats
 
 
+def _collect_hits(raw_val: str, literals: list[str], gen_pats: list[re.Pattern],
+                  regex_rules: list[MaskRule] | None) -> list[str]:
+    """1つの文字列に対する残存検出の内訳を返す（監査の共通処理）"""
+    stream = _norm_str(raw_val)
+    hits = []
+    for lit in literals:
+        if lit in stream:
+            hits.append(f"文字列: {lit[:20]}")
+    for pat in gen_pats:
+        m = pat.search(stream)
+        if m:
+            hits.append(f"形式一致: {m.group()[:20]}")
+    for rule in (regex_rules or []):
+        m = rule.pattern.search(raw_val)
+        if m:
+            hits.append(f"{rule.label}: {m.group()[:20]}")
+    return hits
+
+
 def audit_pdf(pdf_path: Path, literal_texts: list[str] | None = None,
               regex_rules: list[MaskRule] | None = None,
               generalize: bool = False) -> list[dict]:
@@ -518,22 +634,20 @@ def audit_pdf(pdf_path: Path, literal_texts: list[str] | None = None,
     doc = fitz.open(str(pdf_path))
     flagged = []
     for i, page in enumerate(doc):
-        raw_text = page.get_text()
-        stream = _norm_str(raw_text)
-        hits = []
-        for lit in literals:
-            if lit in stream:
-                hits.append(f"文字列: {lit[:20]}")
-        for pat in gen_pats:
-            m = pat.search(stream)
-            if m:
-                hits.append(f"形式一致: {m.group()[:20]}")
-        for rule in (regex_rules or []):
-            m = rule.pattern.search(raw_text)
-            if m:
-                hits.append(f"{rule.label}: {m.group()[:20]}")
+        hits = _collect_hits(page.get_text(), literals, gen_pats, regex_rules)
         if hits:
             flagged.append({"page": i + 1, "hits": sorted(set(hits))})
+
+    # 文書情報（ページ本文ではないため page 番号を持たない。0 で「ページ外」を表す）
+    meta = doc.metadata or {}
+    meta_hits = []
+    for field in _PDF_METADATA_FIELDS:
+        val = meta.get(field)
+        if isinstance(val, str) and val:
+            meta_hits += [f"{field}/{h}" for h in _collect_hits(val, literals, gen_pats, regex_rules)]
+    if meta_hits:
+        flagged.append({"page": 0, "hits": sorted(set(meta_hits))})
+
     doc.close()
     return flagged
 
@@ -552,19 +666,7 @@ def audit_text_blob(text: str, literal_texts: list[str] | None = None,
     for i, line in enumerate(text.splitlines()):
         if not line.strip():
             continue
-        stream = _norm_str(line)
-        hits = []
-        for lit in literals:
-            if lit in stream:
-                hits.append(f"文字列: {lit[:20]}")
-        for pat in gen_pats:
-            m = pat.search(stream)
-            if m:
-                hits.append(f"形式一致: {m.group()[:20]}")
-        for rule in (regex_rules or []):
-            m = rule.pattern.search(line)
-            if m:
-                hits.append(f"{rule.label}: {m.group()[:20]}")
+        hits = _collect_hits(line, literals, gen_pats, regex_rules)
         if hits:
             flagged.append({"location": f"{unit}{i + 1}", "hits": sorted(set(hits))})
     return flagged
@@ -573,8 +675,19 @@ def audit_text_blob(text: str, literal_texts: list[str] | None = None,
 def audit_docx(source, literal_texts: list[str] | None = None,
                regex_rules: list[MaskRule] | None = None,
                generalize: bool = False) -> list[dict]:
-    """マスク済みDOCXを再スキャンし、対象文字列・形式・パターンが残っている段落を返す"""
-    return audit_text_blob(extract_docx_text(source), literal_texts, regex_rules, generalize, unit="段落")
+    """マスク済みDOCXを再スキャンし、対象文字列・形式・パターンが残っている箇所を返す。
+
+    戻り値: [{"location": "本文 段落3" / "表1 2行1列" / "文書プロパティ(creator)" 等,
+              "hits": [検出内容, ...]}, ...]
+    """
+    literals, gen_pats = _build_audit_matchers(literal_texts, generalize)
+
+    flagged = []
+    for where, text in _iter_docx_texts(source):
+        hits = _collect_hits(text, literals, gen_pats, regex_rules)
+        if hits:
+            flagged.append({"location": where, "hits": sorted(set(hits))})
+    return flagged
 
 
 def audit_text_file(raw: bytes, literal_texts: list[str] | None = None,
@@ -726,6 +839,47 @@ def _redact_text_occurrences(page, targets: list[str], generalize: bool = False)
     return count
 
 
+# PDFの文書情報のうち、機密情報が入りうる文字列フィールド。
+# format/encryption や日時はマスク対象にしない。
+_PDF_METADATA_FIELDS = ("title", "author", "subject", "keywords", "creator", "producer")
+
+
+def _literal_rules(values: list[str] | None, label: str = "《マスク》") -> list[MaskRule]:
+    """値の一覧を、表記ゆれを許容する完全一致ルールに変換する（長い値から適用）"""
+    rules = []
+    for v in sorted({v for v in (values or []) if v.strip()}, key=len, reverse=True):
+        rules.append(MaskRule(pattern=re.compile(tolerant_pattern(v)), label=label))
+    return rules
+
+
+def _pdf_metadata_rules(rules: list[MaskRule], literal_texts: list[str] | None) -> list[MaskRule]:
+    """文書情報の照合に使うルール。画面で選んだ候補文字列も完全一致ルールとして加える
+    （候補はページの黒塗りでは文字単位照合に回るため rules に含まれないことがある）。"""
+    return _literal_rules(literal_texts) + list(rules or [])
+
+
+def _mask_pdf_metadata(doc, rules: list[MaskRule], literal_texts: list[str] | None = None) -> int:
+    all_rules = _pdf_metadata_rules(rules, literal_texts)
+    if not all_rules:
+        return 0
+
+    meta = doc.metadata or {}
+    updates = {}
+    total = 0
+    for field in _PDF_METADATA_FIELDS:
+        val = meta.get(field)
+        if not isinstance(val, str) or not val:
+            continue
+        new_val, n = apply_rules(val, all_rules)
+        if n:
+            updates[field] = new_val
+            total += n
+
+    if updates:
+        doc.set_metadata({**meta, **updates})
+    return total
+
+
 def mask_pdf(
     input_path: Path,
     output_path: Path,
@@ -802,6 +956,10 @@ def mask_pdf(
         except TypeError:
             page.apply_redactions()
 
+    # 文書情報（タイトル・作成者等）。ページ上には現れないがビューアの
+    # プロパティ画面に出るため、黒塗りしても客先名がここから読めてしまう。
+    total += _mask_pdf_metadata(doc, rules, line_texts)
+
     doc.save(str(output_path), garbage=4, deflate=True)
     doc.close()
     return total
@@ -809,41 +967,82 @@ def mask_pdf(
 
 # ---------- DOCX ----------
 
-def extract_docx_text(source) -> str:
-    """DOCXから本文・表・ヘッダー/フッターの全テキストを抽出する（sourceはパスまたはfile-like）"""
+def _docx_textbox_paragraphs(doc):
+    """DOCX内のテキストボックス(図形内テキスト)の段落を列挙する。
+
+    doc.paragraphs は本文直下の段落しか返さず、cell.paragraphs も同様のため、
+    テキストボックスの中身はどちらにも現れない。図面の表題欄や注記は
+    テキストボックスで作られることが多く、そこに客先名が入っていると
+    抽出にも監査にも出ないまま素通りしていた。
+    """
+    try:
+        from docx.oxml.ns import qn
+        from docx.text.paragraph import Paragraph
+    except ImportError:
+        return
+
+    # 本文・ヘッダー/フッターの各パートを走査する（テキストボックスはどこにでも置ける）
+    elements = [doc.element.body]
+    for section in doc.sections:
+        for part in (section.header, section.footer,
+                     section.even_page_header, section.first_page_header,
+                     section.even_page_footer, section.first_page_footer):
+            elements.append(part._element)
+
+    for element in elements:
+        for txbx in element.iter(qn("w:txbxContent")):
+            for p in txbx.iter(qn("w:p")):
+                yield Paragraph(p, doc)
+
+
+def _iter_docx_texts(source):
+    """DOCXの全テキストを (場所の説明, 文字列) で列挙する。
+
+    本文・表・ヘッダー/フッター・テキストボックス・文書プロパティを対象にする。
+    場所を持たせているのは、マスク後検査で「どこに残っているか」を示すため
+    （通し番号だけだと、文書プロパティの残存が本文の段落番号として表示され、
+    本文を探しても見つからない、ということになる）。
+    """
     try:
         from docx import Document
     except ImportError:
-        return ""
+        return
 
     doc = Document(source)
-    parts: list[str] = []
 
-    def collect_paragraphs(paragraphs):
-        for p in paragraphs:
+    def paragraphs_of(where, paragraphs):
+        for i, p in enumerate(paragraphs, 1):
             if p.text.strip():
-                parts.append(p.text)
+                yield f"{where} 段落{i}", p.text
 
-    def collect_table(table):
-        for row in table.rows:
-            for cell in row.cells:
-                collect_paragraphs(cell.paragraphs)
+    def texts_of_table(where, table):
+        for r, row in enumerate(table.rows, 1):
+            for c, cell in enumerate(row.cells, 1):
+                yield from paragraphs_of(f"{where} {r}行{c}列", cell.paragraphs)
                 for nested in cell.tables:
-                    collect_table(nested)
+                    yield from texts_of_table(f"{where} {r}行{c}列 内表", nested)
 
-    collect_paragraphs(doc.paragraphs)
-    for table in doc.tables:
-        collect_table(table)
+    yield from paragraphs_of("本文", doc.paragraphs)
+    for i, table in enumerate(doc.tables, 1):
+        yield from texts_of_table(f"表{i}", table)
 
-    for section in doc.sections:
-        collect_paragraphs(section.header.paragraphs)
-        collect_paragraphs(section.footer.paragraphs)
-        for hdr in (section.even_page_header, section.first_page_header):
-            collect_paragraphs(hdr.paragraphs)
-        for ftr in (section.even_page_footer, section.first_page_footer):
-            collect_paragraphs(ftr.paragraphs)
+    for i, section in enumerate(doc.sections, 1):
+        for name, part in (("ヘッダー", section.header), ("フッター", section.footer),
+                           ("偶数ページヘッダー", section.even_page_header),
+                           ("先頭ページヘッダー", section.first_page_header),
+                           ("偶数ページフッター", section.even_page_footer),
+                           ("先頭ページフッター", section.first_page_footer)):
+            yield from paragraphs_of(f"セクション{i} {name}", part.paragraphs)
 
-    return "\n".join(parts)
+    yield from paragraphs_of("テキストボックス", _docx_textbox_paragraphs(doc))
+
+    yield from _iter_ooxml_property_texts(source)
+
+
+def extract_docx_text(source) -> str:
+    """DOCXから本文・表・ヘッダー/フッター・テキストボックス・文書プロパティの
+    全テキストを抽出する（sourceはパスまたはfile-like）"""
+    return "\n".join(text for _, text in _iter_docx_texts(source))
 
 
 def _process_paragraphs(paragraphs, rules: list[MaskRule]) -> int:
@@ -901,7 +1100,13 @@ def mask_docx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
         for ftr in (section.even_page_footer, section.first_page_footer):
             total += _process_paragraphs(ftr.paragraphs, rules)
 
+    # テキストボックス（図面の表題欄・注記等。本文段落としては拾えない）
+    total += _process_paragraphs(_docx_textbox_paragraphs(doc), rules)
+
     doc.save(str(output_path))
+
+    # 作成者・会社名等の文書プロパティは保存後にZIPを直接書き換える
+    total += _mask_ooxml_properties(output_path, rules)
     return total
 
 
@@ -975,6 +1180,12 @@ def _iter_xlsx_all_texts(source):
             # 印刷時のヘッダー/フッター。画面上のセルには現れないが文字列として保存される。
             for where, text in _iter_xlsx_header_footer(ws):
                 yield ws.title, where, text, False
+            # シート名そのもの（「〇〇工業_台帳」のように客先名が入ることがある）
+            if ws.title.strip():
+                yield ws.title, "シート名", ws.title, False
+        # 作成者・会社名等の文書プロパティ
+        for where, text in _iter_ooxml_property_texts(source):
+            yield "(ブック)", where, text, False
     finally:
         wb.close()
         wb_cached.close()
@@ -1049,9 +1260,31 @@ def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
                         part.text = new_text
                         total += n
 
+    # シート名（「〇〇工業_台帳」のように客先名が入ることがある）。
+    # マスク後に同名になるシートは連番で区別する（Excelは同名シートを許さない）。
+    used = {ws.title for ws in wb.worksheets}
+    for ws in wb.worksheets:
+        new_title, n = apply_rules(ws.title, rules)
+        if not n or new_title == ws.title:
+            continue
+        used.discard(ws.title)
+        # シート名は31文字まで
+        base = new_title[:31] or "Sheet"
+        candidate, i = base, 2
+        while candidate in used:
+            suffix = f"_{i}"
+            candidate = base[:31 - len(suffix)] + suffix
+            i += 1
+        used.add(candidate)
+        ws.title = candidate
+        total += n
+
     wb.save(str(output_path))
     wb.close()
     wb_cached.close()
+
+    # 作成者・会社名等の文書プロパティは保存後にZIPを直接書き換える
+    total += _mask_ooxml_properties(output_path, rules)
     return total
 
 
@@ -1066,19 +1299,7 @@ def audit_xlsx(source, literal_texts: list[str] | None = None,
 
     flagged = []
     for sheet_name, coord, raw_val, is_formula in _iter_xlsx_all_texts(source):
-        stream = _norm_str(raw_val)
-        hits = []
-        for lit in literals:
-            if lit in stream:
-                hits.append(f"文字列: {lit[:20]}")
-        for pat in gen_pats:
-            m = pat.search(stream)
-            if m:
-                hits.append(f"形式一致: {m.group()[:20]}")
-        for rule in (regex_rules or []):
-            m = rule.pattern.search(raw_val)
-            if m:
-                hits.append(f"{rule.label}: {m.group()[:20]}")
+        hits = _collect_hits(raw_val, literals, gen_pats, regex_rules)
         if hits:
             loc = f"{sheet_name}!{coord}" + ("(数式)" if is_formula else "")
             flagged.append({"location": loc, "hits": sorted(set(hits))})
