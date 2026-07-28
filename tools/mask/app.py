@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from flask import Flask, jsonify, render_template, request, send_file
 
-from mask_tool import MaskRule, audit_file, audit_pdf, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_file_candidates
+from mask_tool import MaskRule, audit_file, audit_pdf, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_file_candidates, tolerant_pattern
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -52,7 +52,7 @@ def build_rules(form: dict, value_rules: list, pattern_rules: list) -> list[Mask
     for i, rule in enumerate(value_rules):
         val = form.get(f"val_{i}", "").strip()
         if val:
-            rules.append(MaskRule(pattern=re.compile(re.escape(val)), label=rule["label"]))
+            rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label=rule["label"]))
     for i, rule in enumerate(pattern_rules):
         if form.get(f"pat_{i}") == "on":
             try:
@@ -123,7 +123,7 @@ def process():
     # 候補リストから確定した値を追加
     auto_scan_vals = [v.strip() for v in request.form.getlist("candidate_val") if v.strip()]
     for val in auto_scan_vals:
-        rules.append(MaskRule(pattern=re.compile(re.escape(val)), label="《検出候補》"))
+        rules.append(MaskRule(pattern=re.compile(tolerant_pattern(val)), label="《検出候補》"))
 
     image_xrefs = [int(x) for x in request.form.getlist("img_xref") if x.isdigit()]
 

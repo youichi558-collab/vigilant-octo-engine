@@ -29,6 +29,7 @@ import argparse
 import re
 import shutil
 import sys
+import unicodedata
 from pathlib import Path
 from typing import NamedTuple
 
@@ -41,6 +42,34 @@ except ImportError:
 class MaskRule(NamedTuple):
     pattern: re.Pattern
     label: str
+
+
+# ハイフン・ダッシュ類（全角/半角・長音記号を含む）。表記ゆれ許容パターンと
+# 監査用の文字正規化(_norm_char)の両方で同じ集合を使う。
+HYPHEN_CHARS = "‐‑‒–—―−ー－-"
+_HYPHEN_ALT = "|".join(re.escape(ch) for ch in dict.fromkeys(HYPHEN_CHARS))
+_DIGIT_CLASS = "[0-9０-９]"
+
+
+def tolerant_pattern(value: str) -> str:
+    """値の完全一致(re.escape)の代わりに、全角/半角の数字・ハイフン類の表記ゆれを
+    許容する正規表現パターン文字列を作る。
+
+    PDFの黒塗り(_redact_text_occurrences)は文字単位で正規化して照合するため
+    表記ゆれに強いが、DOCX/XLSX/テキストのラベル置換(apply_rules)は単純な
+    文字列一致のため、同じ電話番号でもセルによって全角/半角が混在していると
+    一部だけマスクされ一部が素通りする、という不具合につながっていた。
+    """
+    parts = []
+    for c in value:
+        nc = unicodedata.normalize("NFKC", c)
+        if len(nc) == 1 and nc.isdigit():
+            parts.append(_DIGIT_CLASS)
+        elif c in HYPHEN_CHARS:
+            parts.append(f"(?:{_HYPHEN_ALT})")
+        else:
+            parts.append(re.escape(c))
+    return "".join(parts)
 
 
 def load_rules(config_path: str) -> list[MaskRule]:
@@ -56,7 +85,7 @@ def load_rules(config_path: str) -> list[MaskRule]:
             except re.error as e:
                 print(f"警告: 正規表現エラー ({m['pattern']}): {e} — スキップします")
         elif "value" in m:
-            rules.append(MaskRule(pattern=re.compile(re.escape(m["value"])), label=label))
+            rules.append(MaskRule(pattern=re.compile(tolerant_pattern(m["value"])), label=label))
         else:
             print(f"警告: 'value' または 'pattern' がないエントリをスキップ: {m}")
     return rules
@@ -356,10 +385,9 @@ def render_pdf_pages(pdf_bytes: bytes, max_pages: int = 10, scale: float = 1.5, 
 
 def _norm_char(c: str) -> str:
     """照合用の文字正規化: 全角/半角の差・ハイフン類の字種差を吸収する"""
-    import unicodedata
     c = unicodedata.normalize("NFKC", c)
     # ハイフン・ダッシュ類はすべて '-' に寄せる
-    return "".join("-" if ch in "‐‑‒–—―−ー－" else ch for ch in c)
+    return "".join("-" if ch in HYPHEN_CHARS else ch for ch in c)
 
 
 def _generalize_pattern(tn: str) -> str:
