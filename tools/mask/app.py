@@ -18,7 +18,7 @@ from pathlib import Path
 import yaml
 from flask import Flask, jsonify, render_template, request, send_file
 
-from mask_tool import MaskRule, audit_file, audit_pdf, extract_page_text_candidates, extract_pdf_images, process_file, render_pdf_pages, scan_file_candidates, tolerant_pattern
+from mask_tool import MaskRule, audit_file, audit_pdf, extract_page_text_candidates, extract_pdf_images, extract_xlsx_images, process_file, render_pdf_pages, scan_file_candidates, tolerant_pattern
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
@@ -143,12 +143,14 @@ def scan_candidates():
 
 @app.route("/extract_images", methods=["POST"])
 def extract_images():
+    """ロゴ・写真の一覧を返す。識別子はPDFがxref、XLSXがZIP内のパス。"""
     file = request.files.get("file")
-    if not file:
+    if not file or not file.filename:
         return jsonify({"images": []})
-    pdf_bytes = file.read()
-    images = extract_pdf_images(pdf_bytes)
-    return jsonify({"images": images})
+    raw = file.read()
+    if Path(file.filename).suffix.lower() == ".xlsx":
+        return jsonify({"images": extract_xlsx_images(io.BytesIO(raw))})
+    return jsonify({"images": extract_pdf_images(raw)})
 
 
 @app.route("/process", methods=["POST"])
@@ -187,6 +189,11 @@ def process():
 
     image_xrefs = [int(x) for x in request.form.getlist("img_xref") if x.isdigit()]
 
+    # XLSXの画像はZIP内のパスで指定する。想定外のパートを書き換えないよう、
+    # xl/media/ 配下だけを受け付ける。
+    image_parts = [p for p in request.form.getlist("img_part")
+                   if p.startswith("xl/media/") and ".." not in p]
+
     try:
         regions = json.loads(request.form.get("regions", "[]"))
     except Exception:
@@ -215,7 +222,7 @@ def process():
     # 形式マスク: チェックした候補を形式パターンに汎化して全ページ照合
     generalize = request.form.get("generalize") == "on"
 
-    if not rules and not image_xrefs and not regions and not candidate_texts:
+    if not rules and not image_xrefs and not image_parts and not regions and not candidate_texts:
         return jsonify({"error": "有効なマスクルールがありません。値を入力するか自動パターンをONにしてください"}), 400
 
     suffix = Path(file.filename).suffix.lower()
@@ -229,7 +236,8 @@ def process():
                      image_xrefs if suffix == ".pdf" else None,
                      regions if suffix == ".pdf" else None,
                      candidate_texts if suffix == ".pdf" else None,
-                     generalize)
+                     generalize,
+                     image_parts=image_parts if suffix == ".xlsx" else None)
     except Exception as e:
         return jsonify({"error": f"処理エラー: {e}"}), 500
 

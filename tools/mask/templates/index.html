@@ -544,7 +544,7 @@
       <div id="regionTagList" style="margin-top:4px; min-height:24px;"></div>
     </div>
 
-    <!-- 画像選択パネル（PDFのみ表示） -->
+    <!-- 画像選択パネル（PDF・XLSXで表示） -->
     <div id="imagePanel" style="display:none;">
       <div class="section-label" style="margin:12px 0 8px; font-size:12px; font-weight:700; color:#1a1a2e; display:flex; align-items:center; gap:6px;">
         <span style="display:inline-block;width:3px;height:14px;background:#e63946;border-radius:2px;"></span>
@@ -1053,11 +1053,10 @@ function onFileSelect(input) {
   const pagePreviewList    = document.getElementById('pagePreviewList');
   pagePreviewPanel.style.display = isPdf ? 'block' : 'none';
 
-  // 画像パネル
-  const imagePanel   = document.getElementById('imagePanel');
-  const imageGrid    = document.getElementById('imageGrid');
-  const imageLoading = document.getElementById('imageLoading');
-  imagePanel.style.display = isPdf ? 'block' : 'none';
+  // 画像パネル（PDFとXLSX。ロゴ・写真は文字ではないため置換では消えない）
+  const isXlsx = file && file.name.toLowerCase().endsWith('.xlsx');
+  document.getElementById('imagePanel').style.display = (isPdf || isXlsx) ? 'block' : 'none';
+  if (isPdf || isXlsx) loadImages(file);
 
   if (!isPdf) return;
 
@@ -1068,47 +1067,68 @@ function onFileSelect(input) {
   // 候補リストはloadPreviewPage()内で更新される
   candidateList.innerHTML = '';
   candidateLoading.style.display = 'block';
+}
 
-  // --- 画像抽出（非同期） ---
+// --- 画像抽出（非同期） ---
+// 識別子は形式で異なる（PDFはxref、XLSXはZIP内のパス）。実行時は
+// data-xref / data-part のどちらが入っているかで送信先の項目名を切り替える。
+async function loadImages(file) {
+  const imageGrid    = document.getElementById('imageGrid');
+  const imageLoading = document.getElementById('imageLoading');
   imageGrid.innerHTML = '';
   imageLoading.style.display = 'block';
-  (async () => {
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/extract_images', { method: 'POST', body: fd });
-      const data = await res.json();
-      imageLoading.style.display = 'none';
-      if (!data.images || data.images.length === 0) {
-        imageGrid.innerHTML = '<span style="font-size:12px;color:#888;">画像なし</span>';
-        return;
-      }
-      data.images.forEach(img => {
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'position:relative;cursor:pointer;border:2px solid #d0d0d8;border-radius:6px;padding:3px;background:#fff;transition:all .15s;';
-        wrap.dataset.xref = img.xref;
-        const thumb = document.createElement('img');
-        thumb.src = img.thumbnail;
-        thumb.style.cssText = 'display:block;max-width:100px;max-height:100px;border-radius:3px;';
-        thumb.title = `${img.width}×${img.height}px`;
-        const badge = document.createElement('div');
-        badge.style.cssText = 'display:none;position:absolute;top:2px;right:2px;background:#e63946;color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;font-weight:700;text-align:center;line-height:18px;';
-        badge.textContent = '✓';
-        wrap.appendChild(thumb);
-        wrap.appendChild(badge);
-        imageGrid.appendChild(wrap);
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/extract_images', { method: 'POST', body: fd });
+    const data = await res.json();
+    imageLoading.style.display = 'none';
+    if (!data.images || data.images.length === 0) {
+      imageGrid.innerHTML = '<span style="font-size:12px;color:#888;">画像なし</span>';
+      return;
+    }
+    data.images.forEach(img => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:relative;cursor:pointer;border:2px solid #d0d0d8;border-radius:6px;padding:3px;background:#fff;transition:all .15s;';
+      if (img.part !== undefined) wrap.dataset.part = img.part;
+      else wrap.dataset.xref = img.xref;
+
+      // 塗りつぶせない形式（EMF/WMF等）は選んでも消えないので、選択させない
+      const maskable = img.maskable !== false;
+
+      const thumb = document.createElement('img');
+      thumb.src = img.thumbnail;
+      thumb.style.cssText = 'display:block;max-width:100px;max-height:100px;border-radius:3px;';
+      thumb.title = maskable
+        ? `${img.width}×${img.height}px`
+        : `${img.width}×${img.height}px ／ この形式は塗りつぶせません`;
+      const badge = document.createElement('div');
+      badge.style.cssText = 'display:none;position:absolute;top:2px;right:2px;background:#e63946;color:#fff;border-radius:50%;width:18px;height:18px;font-size:11px;font-weight:700;text-align:center;line-height:18px;';
+      badge.textContent = '✓';
+      wrap.appendChild(thumb);
+      wrap.appendChild(badge);
+
+      if (!maskable) {
+        wrap.style.cursor = 'not-allowed';
+        wrap.style.opacity = '0.45';
+        const note = document.createElement('div');
+        note.style.cssText = 'font-size:10px;color:#c0392b;text-align:center;padding-top:2px;';
+        note.textContent = '非対応形式';
+        wrap.appendChild(note);
+      } else {
         wrap.addEventListener('click', () => {
           const selected = wrap.dataset.selected === '1';
           wrap.dataset.selected = selected ? '0' : '1';
           wrap.style.borderColor = selected ? '#d0d0d8' : '#e63946';
           badge.style.display = selected ? 'none' : 'block';
         });
-      });
-    } catch (e) {
-      imageLoading.style.display = 'none';
-      imageGrid.innerHTML = '<span style="font-size:12px;color:#c0392b;">画像読み込みエラー</span>';
-    }
-  })();
+      }
+      imageGrid.appendChild(wrap);
+    });
+  } catch (e) {
+    imageLoading.style.display = 'none';
+    imageGrid.innerHTML = '<span style="font-size:12px;color:#c0392b;">画像読み込みエラー</span>';
+  }
 }
 
 function formatSize(bytes) {
@@ -1147,9 +1167,10 @@ document.getElementById('mainForm').addEventListener('submit', async function(e)
 
   try {
     const formData = new FormData(this);
-    // 選択された画像xrefを追加
+    // 選択された画像を追加（PDFはxref、XLSXはZIP内のパスで指定する）
     document.querySelectorAll('#imageGrid [data-selected="1"]').forEach(el => {
-      formData.append('img_xref', el.dataset.xref);
+      if (el.dataset.part !== undefined) formData.append('img_part', el.dataset.part);
+      else formData.append('img_xref', el.dataset.xref);
     });
     // 範囲指定を追加
     formData.append('regions', JSON.stringify(selectedRegions));

@@ -1373,6 +1373,117 @@ def _restore_xlsx_drawings(input_path: Path, output_path: Path, rules: list[Mask
     return total
 
 
+# ---- 図形として貼られた画像（xl/media/） ----
+# ロゴ・写真・図面のスクリーンショットは文字ではないためテキスト置換では消えない。
+# PDF と同じように、利用者が選んだものを塗りつぶす。
+
+def _blacken_image_bytes(data: bytes) -> bytes | None:
+    """画像を同じ形式・同じ画素数の黒画像に差し替えたバイト列を返す。
+
+    形式と寸法を変えないことで、シート上の配置やパートの種類宣言が
+    そのまま通る。形式を読み書きできない場合(EMF/WMF等のベクタ形式)は
+    None を返し、呼び出し側で「塗れなかった」ものとして扱う。
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    import io
+
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            fmt, size, mode = im.format, im.size, im.mode
+        if not fmt:
+            return None
+        out_mode = "RGBA" if mode in ("RGBA", "LA", "PA") else "RGB"
+        fill = (0, 0, 0, 255) if out_mode == "RGBA" else (0, 0, 0)
+        buf = io.BytesIO()
+        Image.new(out_mode, size, fill).save(buf, format=fmt)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _xlsx_media_parts(z) -> list[str]:
+    """ブック内の画像パートのZIP内パスを返す"""
+    return sorted(n for n in z.namelist()
+                  if n.startswith("xl/media/") and not n.endswith("/"))
+
+
+def extract_xlsx_images(source) -> list[dict]:
+    """XLSX内の画像を抽出してbase64サムネイル付きで返す。
+
+    識別子は xl/media/... のパス（PDFのxrefに相当）。
+    塗りつぶせない形式は maskable=False で返し、画面側で区別できるようにする。
+    """
+    import zipfile
+    if hasattr(source, "seek"):
+        source.seek(0)
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return []
+    import base64
+    import io
+
+    result = []
+    try:
+        with zipfile.ZipFile(source) as z:
+            for part in _xlsx_media_parts(z):
+                data = z.read(part)
+                entry = {"part": part, "width": 0, "height": 0,
+                         "thumbnail": "", "maskable": False}
+                try:
+                    with Image.open(io.BytesIO(data)) as im:
+                        entry["width"], entry["height"] = im.size
+                        thumb = im.convert("RGBA" if im.mode in ("RGBA", "LA", "PA") else "RGB")
+                        thumb.thumbnail((120, 120))
+                        buf = io.BytesIO()
+                        thumb.save(buf, format="PNG")
+                    entry["thumbnail"] = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+                    entry["maskable"] = _blacken_image_bytes(data) is not None
+                except Exception:
+                    pass
+                result.append(entry)
+    except (zipfile.BadZipFile, OSError):
+        return []
+    return result
+
+
+def _blacken_xlsx_images(output_path: Path, image_parts: list[str]) -> tuple[int, list[str]]:
+    """指定した画像パートを黒画像に差し替える。戻り値: (塗った枚数, 塗れなかったパート)"""
+    import zipfile
+    targets = set(image_parts or [])
+    if not targets:
+        return 0, []
+
+    try:
+        with zipfile.ZipFile(output_path) as z:
+            order = [info.filename for info in z.infolist()]
+            parts = {name: z.read(name) for name in order}
+    except (zipfile.BadZipFile, OSError):
+        return 0, []
+
+    count = 0
+    failed = []
+    for name in list(parts):
+        if name not in targets:
+            continue
+        blacked = _blacken_image_bytes(parts[name])
+        if blacked is None:
+            failed.append(name)
+        else:
+            parts[name] = blacked
+            count += 1
+
+    if count:
+        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as z:
+            for name in order:
+                z.writestr(name, parts[name])
+    return count, failed
+
+
 # 印刷ヘッダー/フッターは「奇数/偶数/先頭ページ」×「左/中央/右」で保持される
 _HF_GROUPS = ("oddHeader", "oddFooter", "evenHeader", "evenFooter", "firstHeader", "firstFooter")
 _HF_PARTS = ("left", "center", "right")
@@ -1453,7 +1564,8 @@ def scan_xlsx_candidates(source, extra_patterns: list[dict] | None = None) -> li
     return scan_text_candidates(extract_xlsx_text(source), extra_patterns)
 
 
-def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int:
+def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule],
+              image_parts: list[str] | None = None) -> int:
     try:
         import openpyxl
     except ImportError:
@@ -1537,6 +1649,13 @@ def mask_xlsx(input_path: Path, output_path: Path, rules: list[MaskRule]) -> int
     # 図形・テキストボックスは openpyxl の保存で失われるため、原本から戻す
     total += _restore_xlsx_drawings(input_path, output_path, rules)
 
+    # 選択されたロゴ・写真を塗りつぶす（図形の復元後に行う。復元で画像が
+    # 原本のものに戻るため、先に塗っても上書きされてしまう）
+    blacked, failed = _blacken_xlsx_images(output_path, image_parts)
+    total += blacked
+    for part in failed:
+        print(f"  警告: 画像を塗りつぶせませんでした（対応していない形式）: {part}")
+
     # 作成者・会社名等の文書プロパティは保存後にZIPを直接書き換える
     total += _mask_ooxml_properties(output_path, rules)
     return total
@@ -1564,7 +1683,7 @@ def audit_xlsx(source, literal_texts: list[str] | None = None,
 
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".log", ".ini", ".json", ".xml", ".html", ".htm"}
 
-def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None, regions: list[dict] | None = None, line_texts: list[str] | None = None, generalize: bool = False):
+def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], image_xrefs: list[int] | None = None, regions: list[dict] | None = None, line_texts: list[str] | None = None, generalize: bool = False, image_parts: list[str] | None = None):
     suffix = input_path.suffix.lower()
     if suffix == ".pdf":
         count = mask_pdf(input_path, output_path, rules, image_xrefs, regions, line_texts, generalize)
@@ -1573,7 +1692,7 @@ def process_file(input_path: Path, output_path: Path, rules: list[MaskRule], ima
         count = mask_docx(input_path, output_path, rules)
         print(f"  [DOCX]  {count:4d}箇所 ラベル置換 → {output_path.name}")
     elif suffix == ".xlsx":
-        count = mask_xlsx(input_path, output_path, rules)
+        count = mask_xlsx(input_path, output_path, rules, image_parts)
         print(f"  [XLSX]  {count:4d}箇所 ラベル置換 → {output_path.name}")
     elif suffix in TEXT_SUFFIXES or suffix == "":
         count = mask_text_file(input_path, output_path, rules)
