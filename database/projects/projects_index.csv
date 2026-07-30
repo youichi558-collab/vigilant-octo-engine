@@ -1,3 +1,3 @@
-project_id,project_name,client,delivery_site,order_date,delivery_date,work_days,status,agent04_required,notes
-20260614-001,コンベアモーター制御盤（3φ200V 5.5kW 1台・新設）,未確認,未確認,2026-06-14,未確認,—,確認待ち,不要,客先情報・納期は当時未記録。客先確認8件・内部確定2件が未決
-20260615-TEST,搬送ライン制御盤（テスト用）,テスト工業株式会社,テスト工場 第3棟,2026-06-15,2026-09-30,107,完了,要,テスト運用用の仮案件
+project_id,project_name,client,delivery_site,order_date,delivery_date,work_days,status,scale,priority,agent04_required,notes
+20260614-001,コンベアモーター制御盤（3φ200V 5.5kW 1台・新設）,未確認,未確認,2026-06-14,未確認,—,確認待ち,未確認,未確認,不要,客先情報・納期は当時未記録。客先確認8件・内部確定2件が未決
+20260615-TEST,搬送ライン制御盤（テスト用）,テスト工業株式会社,テスト工場 第3棟,2026-06-15,2026-09-30,107,完了,未確認,未確認,要,テスト運用用の仮案件

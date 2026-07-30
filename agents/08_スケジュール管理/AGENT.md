@@ -81,7 +81,7 @@
 ## projects_index.csv 列構成
 
 ```
-project_id,project_name,client,delivery_site,order_date,delivery_date,work_days,status,agent04_required,notes
+project_id,project_name,client,delivery_site,order_date,delivery_date,work_days,status,scale,priority,agent04_required,notes
 ```
 
 | 列名 | 内容 |
@@ -94,8 +94,12 @@ project_id,project_name,client,delivery_site,order_date,delivery_date,work_days,
 | delivery_date | 納期（YYYY-MM-DD） |
 | work_days | 工期（日数、自動計算） |
 | status | 受付済み/仕様解析中/仕様確認待ち/部品選定中/確認待ち/監査中/完了 |
+| scale | 概算規模。小（〜1千万）/ 中（〜1億）/ 大（〜10億）（Agent00が受付時に確認） |
+| priority | 優先度。高 / 中 / 低（ユーザーが判断。AIは決めない） |
 | agent04_required | 要/不要/未確認 |
 | notes | 備考 |
+
+> 値が記録されていない項目は空欄にせず「未確認」と記入する。
 
 ---
 
