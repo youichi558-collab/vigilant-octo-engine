@@ -139,6 +139,7 @@ Agent00〜08で運用する(BOM/見積エージェントは後日追加)。
       （上記8ファイルと同構成。監査を行った案件は audit_report.md も追加される）
 /scripts/
   generate_inquiry.py  ← inquiry.md(Markdown)を客先質疑書(Excel)に変換
+  import_inquiry.py    ← 返送された質疑書(Excel)の回答を inquiry.md に書き戻す
   convert_catalog.py   ← カタログPDFの表をCSV/JSONに変換(案件ごとの単発利用)
 /tools/
   mask/            ← 客先名・設備番号等を隠蔽して社外共有用ファイルを作るツール
