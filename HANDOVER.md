@@ -8,8 +8,27 @@
 ## 1. リポジトリの状態
 
 - ブランチは `main` のみ。作業ブランチは全て削除済み（`CLAUDE.md` のGit運用ルールどおり）
-- 直近コミット: `cee7361`
 - 作業は `main` で直接行い、完了後 `git push origin main` する。別ブランチ・PRは作らない
+
+### ⚠️ 最初に `git fetch origin main` すること
+
+**セッションのコンテナは古いスナップショットからクローンされる。** fetchするまで
+`origin/main` が実際より前のコミットを指しており、「作業がmainに入っていない」と
+誤認する。実際に2026-07-30のセッション開始時、`origin/main` は `6f964a4` を指しており、
+fetchで最新に更新された。次のセッションでも同じ誤認が起きた。
+
+```
+git fetch origin main
+git log --oneline -1 origin/main     # これが本当の main
+```
+
+`git remote -v` が `127.0.0.1` を指しているとおり、gitはローカルプロキシ経由。
+プロキシの報告が疑わしいときは GitHub API（`mcp__github__list_branches` /
+`list_commits`）で直接確認するのが確実。
+
+**古い `main` を `--force` で push してはいけない。** 履歴が消える。
+自分のローカルブランチに作業がある場合は `origin/main..<branch>` で
+固有コミットを確認し、`origin/main` にリベースしてから main へ push する。
 
 ---
 
