@@ -128,7 +128,7 @@ Agent00〜08で運用する(BOM/見積エージェントは後日追加)。
     projects_index.csv ← 全案件一覧・進捗・納期・アラート(Agent08が管理)
     _template/       ← 案件フォルダのひな形(新規案件時にコピーして使う)
       spec_summary.md      ← Agent01出力
-      inquiry.md           ← Agent01出力(客先送付用の質疑書ドラフト)
+      inquiry.md           ← Agent01出力(客先送付用の質疑書ドラフト。質疑事項の正本)
       safety_design.md     ← Agent04出力(安全要求がある案件のみ)
       standard_proposal.md ← Agent02出力(過去データ整備後)
       parts_selection.md   ← Agent03出力
@@ -138,7 +138,7 @@ Agent00〜08で運用する(BOM/見積エージェントは後日追加)。
     {案件ID}/        ← 実案件フォルダ(例: 20260614-001/)
       （上記8ファイルと同構成。監査を行った案件は audit_report.md も追加される）
 /scripts/
-  generate_inquiry.py  ← 客先質疑書(Excel)を生成
+  generate_inquiry.py  ← inquiry.md(Markdown)を客先質疑書(Excel)に変換
   convert_catalog.py   ← カタログPDFの表をCSV/JSONに変換(案件ごとの単発利用)
 /tools/
   mask/            ← 客先名・設備番号等を隠蔽して社外共有用ファイルを作るツール

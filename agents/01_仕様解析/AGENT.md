@@ -21,8 +21,21 @@ AIは候補・整理結果を提示するのみで、最終確定は人間が行
 `database/projects/{project_id}/spec_summary.md` を以下のフォーマットで作成する。
 
 客先確認が必要な項目がある場合は、`inquiry.md`（客先送付用の質疑書ドラフト）も
-`_template/inquiry.md` から作成する。Excel形式が必要な場合は
-`scripts/generate_inquiry.py` を使う。
+`_template/inquiry.md` をコピーして作成する。**質疑事項の正本はこのMarkdown**であり、
+案件に応じた質問の追加・削除・文言修正は `{project_id}/inquiry.md` 側で行う。
+
+客先送付用のExcelは変換で作る（質問はスクリプトに書かない）。
+
+```
+python scripts/generate_inquiry.py {project_id}
+    → database/projects/{project_id}/inquiry.md を読み
+      同じフォルダに inquiry_{project_id}.xlsx を出力
+      （inquiry.md が無い場合は _template/inquiry.md を読む）
+```
+
+Markdownの書式と変換ルールは `_template/inquiry.md` の冒頭を参照。
+表の書式を崩すと質問が拾われないため、`| Q1 | 確認事項 | 回答欄 | 備考 |` の
+4列構成を維持する。
 
 ### spec_summary.md フォーマット
 
@@ -122,7 +135,8 @@ PLCプログラム/タッチパネル画面データ/パラメータファイル
    - 盤製作なし（部品選定のみ・既設盤改造等）の場合: Agent05はスキップ。
    - 不明の場合は「客先確認」として未決定項目一覧に記載する。
 
-   > 客先への質問は `scripts/generate_inquiry.py` で質疑書(Excel)として出力できる。
+   > 客先への質問は `inquiry.md` に記載し、`scripts/generate_inquiry.py` で
+   > 質疑書(Excel)に変換して送付する。
 6. 未決定項目(確度が「確定」以外の項目)は、未決定項目一覧に集約し、以下のいずれかに区分する。
    - **客先確認**：客先の回答がなければ確定できない項目(例:操作コイル電圧の最終確認、仕様変更の有無)
    - **内部確定**：他の機器の選定・設計が進めば自動的に確定できる項目(例:PLCのI/O点数、主幹ブレーカ容量、電線サイズ)
