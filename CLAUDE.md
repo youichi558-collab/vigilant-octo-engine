@@ -130,6 +130,7 @@ Agent00〜08で運用する(BOM/見積エージェントは後日追加)。
       spec_summary.md      ← Agent01出力
       inquiry.md           ← Agent01出力(客先送付用の質疑書ドラフト。質疑事項の正本)
       safety_design.md     ← Agent04出力(安全要求がある案件のみ)
+      safety_approval.md   ← Agent04出力(客先送付用の安全対策承認依頼)
       standard_proposal.md ← Agent02出力(過去データ整備後)
       parts_selection.md   ← Agent03出力
       panel_spec.md        ← Agent05出力(盤製作がある案件のみ)
@@ -138,7 +139,7 @@ Agent00〜08で運用する(BOM/見積エージェントは後日追加)。
     {案件ID}/        ← 実案件フォルダ(例: 20260614-001/)
       （上記8ファイルと同構成。監査を行った案件は audit_report.md も追加される）
 /scripts/
-  generate_inquiry.py  ← inquiry.md(Markdown)を客先質疑書(Excel)に変換
+  generate_inquiry.py  ← Markdownを客先向けExcelに変換(--kind inquiry|approval)
   import_inquiry.py    ← 返送された質疑書(Excel)の回答を inquiry.md に書き戻す
   convert_catalog.py   ← カタログPDFの表をCSV/JSONに変換(案件ごとの単発利用)
 /tools/

@@ -26,6 +26,16 @@ python scripts/generate_inquiry.py {案件ID}                    # 送付用Exce
 python scripts/import_inquiry.py {案件ID} <返送されたxlsx>      # 回答を取り込む
 ```
 
+同じ変換器で**安全対策の承認依頼**も出せる（`--kind approval` → `safety_approval.md` を読む）。
+
+```
+python scripts/generate_inquiry.py {案件ID} --kind approval
+```
+
+承認依頼のように説明文が要る文書は、`## ヘッダー` と `## 質疑事項` の間に **`## 本文`** を
+置く。`### 見出し`・段落・2列の表がExcelに出力される（`## 本文` と `## 質疑事項` の外は
+社内メモとして出力されない）。
+
 回答の取り込みは `--dry-run` で内容を確認してから実行するとよい。
 Excelが空欄の質問と、Markdown側に既に回答がある質問は書き換えない（`--overwrite` で上書き）。
 **回答を蓄積するのはMarkdown側**。Excelに直接書いた内容は再生成で消える。

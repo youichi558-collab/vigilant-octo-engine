@@ -5,5 +5,6 @@ __pycache__/
 # マスクツールの設定（実在の氏名・客先名が入るためコミットしない）
 tools/mask/*マスク設定*.json
 
-# 生成した質疑書Excel（客先名・担当者名が入る。正本は inquiry.md なので再生成できる）
+# 生成した客先向けExcel（客先名・担当者名が入る。正本はMarkdownなので再生成できる）
 inquiry_*.xlsx
+approval_*.xlsx

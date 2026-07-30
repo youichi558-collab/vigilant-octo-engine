@@ -91,9 +91,11 @@ def parse_inquiry_md(path):
 
     header = {}
     sections = []
+    body = []                # 「## 本文」の内容: ("heading"|"para"|"row", ...)
     current_section = None   # (title, rows) — 質疑事項の節を読んでいる間だけ非None
     in_header_table = False
     in_questions = False     # 「## 質疑事項」以降か
+    in_body = False          # 「## 本文」以降か
 
     for line in lines:
         stripped = line.strip()
@@ -102,6 +104,7 @@ def parse_inquiry_md(path):
             title = stripped[3:].strip()
             in_header_table = (title == "ヘッダー")
             in_questions = (title == "質疑事項")
+            in_body = (title == "本文")
             current_section = None
             continue
 
@@ -111,9 +114,26 @@ def parse_inquiry_md(path):
             if in_questions:
                 current_section = (title, [])
                 sections.append(current_section)
+            elif in_body:
+                body.append(("heading", title))
             continue
 
         cells = _split_row(stripped)
+
+        # 本文は表でない行も拾うので、表の判定より先に処理する
+        if in_body:
+            if cells and not _is_separator(cells):
+                if len(cells) >= 2 and cells[0] not in ("項目", "内容"):
+                    body.append(("row", _clean_cell(cells[0]), _clean_cell(cells[1])))
+            elif (
+                not cells
+                and stripped
+                and not stripped.startswith(">")
+                and not re.fullmatch(r"-{3,}|\*{3,}|_{3,}", stripped)  # 水平線
+            ):
+                body.append(("para", _clean_cell(stripped)))
+            continue
+
         if not cells or _is_separator(cells):
             continue
 
@@ -135,7 +155,7 @@ def parse_inquiry_md(path):
 
     # 質問が1件も無い節は落とす(表を持たない節見出しが混ざった場合)
     sections = [(t, rows) for t, rows in sections if rows]
-    return header, sections
+    return header, sections, body
 
 
 def format_question(text):
@@ -160,11 +180,11 @@ def thin_border():
     return Border(left=s, right=s, top=s, bottom=s)
 
 
-def make_header(ws, project_id, header):
+def make_header(ws, project_id, header, title="質 疑 書", preamble=None):
     """タイトル・ヘッダー部を作成する"""
     ws.merge_cells("A1:D1")
     c = ws["A1"]
-    c.value = f"質 疑 書　－　{project_id}"
+    c.value = f"{title}　－　{project_id}"
     c.font = Font(name=FONT_NAME, size=16, bold=True, color=COLOR_WHITE)
     c.fill = PatternFill("solid", fgColor=COLOR_HEADER_BG)
     c.alignment = Alignment(horizontal="center", vertical="center")
@@ -191,7 +211,7 @@ def make_header(ws, project_id, header):
 
     # 前文
     ws.merge_cells(f"A{row}:D{row}")
-    ws[f"A{row}"].value = (
+    ws[f"A{row}"].value = preamble or (
         "下記の事項についてご確認をお願いいたします。"
         "ご多忙のところ恐れ入りますが、回答期限までにご回答いただけますと幸いです。"
     )
@@ -199,6 +219,53 @@ def make_header(ws, project_id, header):
     ws[f"A{row}"].alignment = Alignment(wrap_text=True, vertical="center")
     ws.row_dimensions[row].height = 30
     return row + 1
+
+
+def make_body(ws, row, body):
+    """「## 本文」の説明ブロックを書く（承認依頼のように説明が要る文書向け）"""
+    for item in body:
+        kind = item[0]
+        if kind == "heading":
+            ws.merge_cells(f"A{row}:D{row}")
+            c = ws[f"A{row}"]
+            c.value = f"■ {item[1]}"
+            c.font = Font(name=FONT_NAME, size=11, bold=True, color=COLOR_HEADER_BG)
+            c.fill = PatternFill("solid", fgColor=COLOR_SECTION_BG)
+            c.alignment = Alignment(horizontal="left", vertical="center")
+            c.border = thin_border()
+            ws.row_dimensions[row].height = 22
+        elif kind == "para":
+            ws.merge_cells(f"A{row}:D{row}")
+            c = ws[f"A{row}"]
+            c.value = item[1]
+            c.font = Font(name=FONT_NAME, size=10)
+            c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+            ws.row_dimensions[row].height = max(
+                18, -(-len(item[1]) // 70) * 18
+            )
+        else:  # ("row", ラベル, 値)
+            label, value = item[1], item[2]
+            ws[f"A{row}"].value = label
+            ws[f"A{row}"].font = Font(name=FONT_NAME, size=10, bold=True)
+            ws[f"A{row}"].fill = PatternFill("solid", fgColor=COLOR_SECTION_BG)
+            ws[f"A{row}"].alignment = Alignment(
+                horizontal="left", vertical="top", wrap_text=True
+            )
+            ws[f"A{row}"].border = thin_border()
+
+            ws.merge_cells(f"B{row}:D{row}")
+            ws[f"B{row}"].value = value
+            ws[f"B{row}"].font = Font(name=FONT_NAME, size=10)
+            ws[f"B{row}"].alignment = Alignment(
+                horizontal="left", vertical="top", wrap_text=True
+            )
+            ws[f"B{row}"].border = thin_border()
+            ws.row_dimensions[row].height = max(20, -(-len(value) // 52) * 20)
+        row += 1
+
+    if body:
+        row += 1  # 質疑表との間を1行あける
+    return row
 
 
 def make_table_header(ws, row):
@@ -275,21 +342,41 @@ def make_question(ws, row, no, question, answer, note):
 # エントリポイント
 # ===========================================================================
 
-def resolve_source(project_id, source=None):
+# 文書種別ごとの設定。--kind で切り替える
+KINDS = {
+    "inquiry": {
+        "file": "inquiry.md",
+        "title": "質 疑 書",
+        "sheet": "質疑書",
+        "preamble": None,   # 既定の前文を使う
+    },
+    "approval": {
+        "file": "safety_approval.md",
+        "title": "安全対策 ご確認のお願い",
+        "sheet": "安全対策確認",
+        "preamble": (
+            "弊社にて安全対策を検討いたしましたので、下記のとおりご確認をお願いいたします。"
+            "内容にご要望・相違がございましたらご指摘ください。"
+        ),
+    },
+}
+
+
+def resolve_source(project_id, source=None, kind="inquiry"):
     """読み込むMarkdownのパスを決める"""
     if source:
         if not os.path.exists(source):
             raise FileNotFoundError(f"指定されたMarkdownが見つかりません: {source}")
         return source
 
-    project_md = os.path.join(PROJECTS_DIR, project_id, "inquiry.md")
+    filename = KINDS[kind]["file"]
+    project_md = os.path.join(PROJECTS_DIR, project_id, filename)
     if os.path.exists(project_md):
         return project_md
-    if os.path.exists(TEMPLATE_MD):
+    # ひな形へのフォールバックは質疑書のみ（承認依頼は案件ごとの内容なのでひな形がない）
+    if kind == "inquiry" and os.path.exists(TEMPLATE_MD):
         return TEMPLATE_MD
-    raise FileNotFoundError(
-        f"質疑書のMarkdownが見つかりません: {project_md} / {TEMPLATE_MD}"
-    )
+    raise FileNotFoundError(f"Markdownが見つかりません: {project_md}")
 
 
 def default_output_dir(project_id):
@@ -298,9 +385,10 @@ def default_output_dir(project_id):
     return project_dir if os.path.isdir(project_dir) else "."
 
 
-def generate(project_id, output_dir=None, source=None):
-    src = resolve_source(project_id, source)
-    header, sections = parse_inquiry_md(src)
+def generate(project_id, output_dir=None, source=None, kind="inquiry"):
+    conf = KINDS[kind]
+    src = resolve_source(project_id, source, kind)
+    header, sections, body = parse_inquiry_md(src)
 
     if not sections:
         raise ValueError(
@@ -319,14 +407,15 @@ def generate(project_id, output_dir=None, source=None):
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "質疑書"
+    ws.title = conf["sheet"]
 
     ws.column_dimensions["A"].width = 8    # No
     ws.column_dimensions["B"].width = 50   # 確認事項
     ws.column_dimensions["C"].width = 50   # 回答欄
     ws.column_dimensions["D"].width = 50   # 備考
 
-    row = make_header(ws, project_id, header)
+    row = make_header(ws, project_id, header, conf["title"], conf["preamble"])
+    row = make_body(ws, row, body)
     row = make_table_header(ws, row)
     header_row = row - 1
 
@@ -349,7 +438,7 @@ def generate(project_id, output_dir=None, source=None):
 
     out_dir = output_dir or default_output_dir(project_id)
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"inquiry_{project_id}.xlsx")
+    out_path = os.path.join(out_dir, f"{kind}_{project_id}.xlsx")
     wb.save(out_path)
 
     print(f"読込元　: {src}")
@@ -358,14 +447,23 @@ def generate(project_id, output_dir=None, source=None):
 
 
 def main(argv):
-    args, source = [], None
+    args, source, kind = [], None, "inquiry"
     i = 0
     while i < len(argv):
-        if argv[i] == "--source":
+        if argv[i] in ("--source", "--kind"):
             if i + 1 >= len(argv):
-                print("エラー: --source の後にパスを指定してください", file=sys.stderr)
+                print(f"エラー: {argv[i]} の後に値を指定してください", file=sys.stderr)
                 return 1
-            source = argv[i + 1]
+            if argv[i] == "--source":
+                source = argv[i + 1]
+            else:
+                kind = argv[i + 1]
+                if kind not in KINDS:
+                    print(
+                        f"エラー: --kind は {' / '.join(KINDS)} のいずれか（指定値: {kind}）",
+                        file=sys.stderr,
+                    )
+                    return 1
             i += 2
             continue
         args.append(argv[i])
@@ -375,7 +473,7 @@ def main(argv):
     output_dir = args[1] if len(args) > 1 else None
 
     try:
-        generate(project_id, output_dir, source)
+        generate(project_id, output_dir, source, kind)
     except (FileNotFoundError, ValueError) as e:
         print(f"エラー: {e}", file=sys.stderr)
         return 1
