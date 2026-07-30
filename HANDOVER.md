@@ -129,6 +129,10 @@ python scripts/generate_inquiry.py {案件ID} --kind approval  → approval_{案
   `20260614-001/safety_approval.md` 末尾の社内メモ（仮定A2との対応・MSO-T25の差し戻し等）が
   出力されていないことを実ファイルで確認済み
 - `approval_*.xlsx` も `.gitignore` に追加（客先名が入る）
+- **ウインドウ枠の固定に上限を設けた**（`MAX_FREEZE_ROWS = 12`）。Excelは飛び飛びの行を
+  固定できないため表見出しで固定すると上の説明も全部貼り付き、承認依頼では画面が
+  埋まって中身を確認できなかった。見出しが13行目以降なら固定しない
+  （印刷時の見出し繰り返し `print_title_rows` は従来どおり効く）
 
 **文書の役割分担**: `safety_design.md` = 社内用（仮定・S/F/P算定・部品型式）、
 `safety_approval.md` = 客先用（平易な言葉・PL値は社内参考値として添える程度）。

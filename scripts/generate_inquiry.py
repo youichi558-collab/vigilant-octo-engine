@@ -36,6 +36,10 @@ TEMPLATE_MD = os.path.join(PROJECTS_DIR, "_template", "inquiry.md")
 # Excelヘッダーに載せる項目と並び順。Markdownのヘッダー表に無い項目は空欄で出す
 HEADER_FIELDS = ["宛先", "設備名称", "件名", "送付日", "回答期限", "送付者", "連絡先"]
 
+# ウインドウ枠の固定を行う上限（表見出しがこれより下にある場合は固定しない）。
+# 固定すると見出しより上の行もすべて画面上部に貼り付くため、上が長い文書では逆に見づらい。
+MAX_FREEZE_ROWS = 12
+
 # --- スタイル定義 ---
 COLOR_HEADER_BG  = "1F4E79"  # 濃紺
 COLOR_SECTION_BG = "BDD7EE"  # 薄青
@@ -434,7 +438,12 @@ def generate(project_id, output_dir=None, source=None, kind="inquiry"):
     ws.page_margins.top = 0.75
     ws.page_margins.bottom = 0.75
     ws.print_title_rows = f"{header_row}:{header_row}"  # 各ページに表見出しを繰り返す
-    ws.freeze_panes = f"A{header_row + 1}"
+
+    # ウインドウ枠の固定は表見出しの直下。ただしExcelは飛び飛びの行を固定できないため、
+    # 見出しより上（ヘッダー欄・本文）もすべて固定されてしまう。上が長い文書で固定すると
+    # 画面がほぼ埋まって中身を確認できなくなるので、固定行数に上限を設ける。
+    if header_row <= MAX_FREEZE_ROWS:
+        ws.freeze_panes = f"A{header_row + 1}"
 
     out_dir = output_dir or default_output_dir(project_id)
     os.makedirs(out_dir, exist_ok=True)
