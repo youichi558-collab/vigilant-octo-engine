@@ -97,6 +97,7 @@ Agent00〜08で運用する(BOM/見積エージェントは後日追加)。
 
 ```
 /CLAUDE.md
+/HANDOVER.md       ← 現在の状態・直近の作業・次にやること(作業ごとに上書き)
 /agents/
   00_統括/AGENT.md
   01_仕様解析/AGENT.md
