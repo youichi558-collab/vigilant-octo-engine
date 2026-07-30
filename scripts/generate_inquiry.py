@@ -25,6 +25,7 @@ Markdownを読んでExcelに変換するだけの変換器として動作する�
 import sys
 import os
 import re
+import unicodedata
 from datetime import date
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -39,6 +40,14 @@ HEADER_FIELDS = ["宛先", "設備名称", "件名", "送付日", "回答期限"
 # ウインドウ枠の固定を行う上限（表見出しがこれより下にある場合は固定しない）。
 # 固定すると見出しより上の行もすべて画面上部に貼り付くため、上が長い文書では逆に見づらい。
 MAX_FREEZE_ROWS = 12
+
+# 列幅（openpyxlの単位＝半角文字1文字ぶん。全角文字は2を占める）
+# A列はNo欄だが、ヘッダー欄のラベル（「設備名称」「回答期限」= 全角4文字 = 幅8）も
+# 入るため、余白を含めて収まる10にしている
+COL_WIDTH = {"A": 10, "B": 50, "C": 50, "D": 50}
+
+# 1行あたりの行高（ポイント）。メイリオ10ptで折り返し1行に必要な高さ
+LINE_HEIGHT_PT = 16
 
 # --- スタイル定義 ---
 COLOR_HEADER_BG  = "1F4E79"  # 濃紺
@@ -184,6 +193,43 @@ def thin_border():
     return Border(left=s, right=s, top=s, bottom=s)
 
 
+def display_width(text):
+    """
+    文字列の表示幅を返す（全角=2、半角=1）。
+    列幅と同じ単位にするため。**全角を1と数えると行数を半分に見誤り、
+    行高が足りずに文字が見切れる。**
+    """
+    width = 0
+    for ch in str(text):
+        width += 2 if unicodedata.east_asian_width(ch) in ("F", "W", "A") else 1
+    return width
+
+
+def span_width(*cols):
+    """結合したセルの合計幅（COL_WIDTH の単位）"""
+    return sum(COL_WIDTH[c] for c in cols)
+
+
+def wrapped_lines(text, width_units):
+    """折り返し後の行数。明示的な改行も数える"""
+    if not text:
+        return 1
+    usable = max(width_units - 2, 4)   # 左右の余白ぶんを引く
+    lines = 0
+    for segment in str(text).split("\n"):
+        lines += max(1, -(-display_width(segment) // usable))  # 切り上げ除算
+    return lines
+
+
+def row_height(*measured, minimum=1):
+    """
+    (テキスト, 幅) の組から必要な行高（pt）を求める。
+    最も行数が多い列に合わせる。
+    """
+    lines = max([wrapped_lines(t, w) for t, w in measured] + [minimum])
+    return lines * LINE_HEIGHT_PT
+
+
 def make_header(ws, project_id, header, title="質 疑 書", preamble=None):
     """タイトル・ヘッダー部を作成する"""
     ws.merge_cells("A1:D1")
@@ -208,9 +254,15 @@ def make_header(ws, project_id, header, title="質 疑 書", preamble=None):
         ws[f"B{row}"].font = Font(name=FONT_NAME, size=10)
         ws[f"B{row}"].alignment = Alignment(horizontal="left", vertical="center")
         ws[f"B{row}"].border = thin_border()
+        ws[f"B{row}"].alignment = Alignment(
+            horizontal="left", vertical="center", wrap_text=True
+        )
         # 未記入(空欄またはプレースホルダ)は水色にして手入力箇所を示す
         if value == "" or has_placeholder(value):
             ws[f"B{row}"].fill = PatternFill("solid", fgColor=COLOR_INPUT_BG)
+        ws.row_dimensions[row].height = row_height(
+            (value, span_width("B", "C", "D"))
+        )
         row += 1
 
     # 前文
@@ -221,7 +273,9 @@ def make_header(ws, project_id, header, title="質 疑 書", preamble=None):
     )
     ws[f"A{row}"].font = Font(name=FONT_NAME, size=10)
     ws[f"A{row}"].alignment = Alignment(wrap_text=True, vertical="center")
-    ws.row_dimensions[row].height = 30
+    ws.row_dimensions[row].height = row_height(
+        (ws[f"A{row}"].value, span_width("A", "B", "C", "D"))
+    )
     return row + 1
 
 
@@ -244,11 +298,13 @@ def make_body(ws, row, body):
             c.value = item[1]
             c.font = Font(name=FONT_NAME, size=10)
             c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-            ws.row_dimensions[row].height = max(
-                18, -(-len(item[1]) // 70) * 18
+            ws.row_dimensions[row].height = row_height(
+                (item[1], span_width("A", "B", "C", "D"))
             )
         else:  # ("row", ラベル, 値)
             label, value = item[1], item[2]
+            # ラベルはA列(幅8=全角4文字)では狭すぎるためA:Bに結合する
+            ws.merge_cells(f"A{row}:B{row}")
             ws[f"A{row}"].value = label
             ws[f"A{row}"].font = Font(name=FONT_NAME, size=10, bold=True)
             ws[f"A{row}"].fill = PatternFill("solid", fgColor=COLOR_SECTION_BG)
@@ -257,14 +313,17 @@ def make_body(ws, row, body):
             )
             ws[f"A{row}"].border = thin_border()
 
-            ws.merge_cells(f"B{row}:D{row}")
-            ws[f"B{row}"].value = value
-            ws[f"B{row}"].font = Font(name=FONT_NAME, size=10)
-            ws[f"B{row}"].alignment = Alignment(
+            ws.merge_cells(f"C{row}:D{row}")
+            ws[f"C{row}"].value = value
+            ws[f"C{row}"].font = Font(name=FONT_NAME, size=10)
+            ws[f"C{row}"].alignment = Alignment(
                 horizontal="left", vertical="top", wrap_text=True
             )
-            ws[f"B{row}"].border = thin_border()
-            ws.row_dimensions[row].height = max(20, -(-len(value) // 52) * 20)
+            ws[f"C{row}"].border = thin_border()
+            ws.row_dimensions[row].height = row_height(
+                (label, span_width("A", "B")),
+                (value, span_width("C", "D")),
+            )
         row += 1
 
     if body:
@@ -331,14 +390,12 @@ def make_question(ws, row, no, question, answer, note):
     c.border = thin_border()
 
     # 行高さ: 改行数とB列幅(50文字換算)からの折り返し推定の大きい方
-    texts = [question, answer, note]
-    lines = 1
-    for t in texts:
-        newlines = t.count("\n") + 1
-        longest = max((len(l) for l in t.split("\n")), default=0)
-        wrap = max(1, -(-longest // 46))  # 切り上げ除算
-        lines = max(lines, newlines, wrap)
-    ws.row_dimensions[row].height = max(lines * 24, 60)
+    ws.row_dimensions[row].height = row_height(
+        (question, COL_WIDTH["B"]),
+        (answer, COL_WIDTH["C"]),
+        (note, COL_WIDTH["D"]),
+        minimum=2,   # 回答を書き込む余地として最低2行ぶん確保する
+    )
     return row + 1
 
 
@@ -413,10 +470,9 @@ def generate(project_id, output_dir=None, source=None, kind="inquiry"):
     ws = wb.active
     ws.title = conf["sheet"]
 
-    ws.column_dimensions["A"].width = 8    # No
-    ws.column_dimensions["B"].width = 50   # 確認事項
-    ws.column_dimensions["C"].width = 50   # 回答欄
-    ws.column_dimensions["D"].width = 50   # 備考
+    # 列幅は COL_WIDTH が正本。行高の計算にも同じ値を使う（二重に持たない）
+    for col, width in COL_WIDTH.items():
+        ws.column_dimensions[col].width = width
 
     row = make_header(ws, project_id, header, conf["title"], conf["preamble"])
     row = make_body(ws, row, body)
