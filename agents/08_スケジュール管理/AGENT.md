@@ -37,6 +37,22 @@
 > 毎回「電気が遅い」という結論になり、対策が打てない**。`progress.md` の備考に
 > 待ち日数を残すこと（Agent02の知識蓄積で実績値になる）。
 
+### 回答リードタイムは商流の段数で変わる
+
+**メカ設計が誰かは案件ごとに違う**（`CLAUDE.md` 設計順序の原則）。当社の窓口と、
+答えを持っている相手が別なら、質問は経由の段数ぶん時間がかかる。
+
+| 経路 | 回答リードタイムの見込み |
+|---|---|
+| 直接（窓口＝メカ設計） | 実績値（`customers.csv` の `answer_lead_days`） |
+| 客先経由(1段) | 実績値がなければ直接の2倍を目安に見込む |
+| 商社→客先経由(2段) | さらに延びる。**回答が返らない前提で締切を設ける** |
+
+- `spec_summary.md`「メカ確定状況」の**問い合わせ経路**を見てリードタイムを見込む
+- **経路が未確認の案件は、リードタイムが読めない＝スケジュールが引けない**。
+  これ自体をアラートとして報告する（「未確認」を放置しない）
+- 実績が出たらAgent02へ `customers.csv` の更新を依頼する（次案件の見込み精度が上がる）
+
 ---
 
 ## 起動タイミング
@@ -59,6 +75,7 @@
 |---|---|
 | `database/projects/projects_index.csv` | 全案件一覧（受付〜完了）。必ず最新を読む |
 | `database/projects/{案件ID}/progress.md` | 各案件の進捗詳細 |
+| `database/knowledge/customers.csv` | 客先ごとの回答リードタイム実績（**参照のみ**。更新はAgent02） |
 
 ---
 
@@ -112,16 +129,17 @@
 ## projects_index.csv 列構成
 
 ```
-project_id,project_name,client,delivery_site,order_date,delivery_date,work_days,status,scale,priority,agent04_required,notes
+project_id,project_name,client,delivery_site,order_date,mech_fixed_date,delivery_date,work_days,status,scale,priority,agent04_required,notes
 ```
 
 | 列名 | 内容 |
 |---|---|
 | project_id | YYYYMMDD-XXX 形式 |
 | project_name | 設備名称 |
-| client | 客先名 |
+| client | 客先名（`knowledge/customers.csv` の client と一致させる） |
 | delivery_site | 納入先 |
 | order_date | 受付日（YYYY-MM-DD） |
+| **mech_fixed_date** | **メカ確定日（予定または実績）。電気の起点** |
 | delivery_date | 納期（YYYY-MM-DD） |
 | work_days | 工期（日数、自動計算） |
 | status | 受付済み/仕様解析中/仕様確認待ち/部品選定中/確認待ち/監査中/完了 |
