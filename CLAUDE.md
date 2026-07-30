@@ -54,7 +54,7 @@ Google Driveにアクセスするツールを呼び出す前に、必ず以下�
 
 ## エージェント構成(現フェーズ)
 
-Agent00〜04で運用する(BOM/見積エージェントは後日追加)。
+Agent00〜08で運用する(BOM/見積エージェントは後日追加)。
 
 | Agent | 役割 |
 |---|---|
@@ -66,6 +66,7 @@ Agent00〜04で運用する(BOM/見積エージェントは後日追加)。
 | Agent05 盤製作仕様 | 配線色・端末処理・電線種別・端子台・マーキング等の製作仕様を整理し客先確認用ドラフトを作成 |
 | Agent06 在庫管理 | 材料・部材の在庫数量を管理。入庫・出庫・棚卸の記録、発注量算出時の在庫照合、発注点割れアラート |
 | Agent07 監査 | 全エージェントの行動ログを確認し、Driveアクセス制限・AI不確定原則・ファイル出力完結性のルール遵守を監査 |
+| Agent08 スケジュール管理 | 全案件横断で納期・進捗・キャパシティを管理。マイルストーン超過の検知、新規受注時のキャパシティ評価材料の提示 |
 
 各エージェントの詳細は `/agents/<番号>_<名称>/AGENT.md` を参照。
 
@@ -102,6 +103,10 @@ Agent00〜04で運用する(BOM/見積エージェントは後日追加)。
   02_標準仕様判断/AGENT.md
   03_部品選定/AGENT.md
   04_安全設計/AGENT.md
+  05_盤製作仕様/AGENT.md
+  06_在庫管理/AGENT.md
+  07_監査/AGENT.md
+  08_スケジュール管理/AGENT.md
 /database/
   parts_master/
     index.csv        ← 品番・カテゴリ・メーカー・PDFファイル名・ページ範囲
@@ -111,19 +116,30 @@ Agent00〜04で運用する(BOM/見積エージェントは後日追加)。
   inventory/
     stock.csv              ← 品目ごとの現在庫量・発注点(Agent06が管理)
     stock_transactions.csv ← 入庫・出庫・棚卸のトランザクション履歴(Agent06が管理)
+  logs/
+    agent_log.csv    ← 全エージェントの行動ログ(Agent07が監査に使用)
   rules/
     標準仕様.md
     選定ルール.md
     規格.md
+    電線選定.md      ← 許容電流表・電圧降下計算(Agent03が電線選定に使用)
   projects/
+    projects_index.csv ← 全案件一覧・進捗・納期・アラート(Agent08が管理)
     _template/       ← 案件フォルダのひな形(新規案件時にコピーして使う)
       spec_summary.md      ← Agent01出力
       safety_design.md     ← Agent04出力(安全要求がある案件のみ)
       standard_proposal.md ← Agent02出力(過去データ整備後)
       parts_selection.md   ← Agent03出力
+      panel_spec.md        ← Agent05出力(盤製作がある案件のみ)
+      progress.md          ← 案件個別の進捗・マイルストーン(Agent08が管理)
       design_summary.md    ← Agent00統合サマリ
     {案件ID}/        ← 実案件フォルダ(例: 20260614-001/)
-      （上記5ファイルと同構成）
+      （上記7ファイルと同構成。監査を行った案件は audit_report.md も追加される）
+/scripts/
+  generate_inquiry.py  ← 客先質疑書(Excel)を生成
+  convert_catalog.py   ← カタログPDFの表をCSV/JSONに変換(案件ごとの単発利用)
+/tools/
+  mask/            ← 客先名・設備番号等を隠蔽して社外共有用ファイルを作るツール
 ```
 
 ---
